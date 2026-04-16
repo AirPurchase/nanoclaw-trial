@@ -7,6 +7,8 @@ import fs from 'fs';
 import path from 'path';
 
 import {
+  ANTHROPIC_AUTH_TOKEN,
+  ANTHROPIC_BASE_URL,
   CONTAINER_IMAGE,
   CONTAINER_MAX_OUTPUT_SIZE,
   CONTAINER_TIMEOUT,
@@ -160,6 +162,9 @@ function buildVolumeMounts(
             // Enable Claude's memory feature (persists user preferences between sessions)
             // https://code.claude.com/docs/en/memory#manage-auto-memory
             CLAUDE_CODE_DISABLE_AUTO_MEMORY: '0',
+            // 3rd-party Claude hosting — forward base URL and auth token if configured
+            ...(ANTHROPIC_BASE_URL ? { ANTHROPIC_BASE_URL } : {}),
+            ...(ANTHROPIC_AUTH_TOKEN ? { ANTHROPIC_AUTH_TOKEN } : {}),
           },
         },
         null,
