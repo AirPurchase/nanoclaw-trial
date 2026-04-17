@@ -17,6 +17,8 @@ groups/main/*
 groups/global/*
 !groups/main/CLAUDE.md
 !groups/global/CLAUDE.md
+!groups/main/container-config.json
+!groups/global/container-config.json
 
 # Secrets
 *.keys.json

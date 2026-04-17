@@ -1,0 +1,9 @@
+{
+  "additionalMounts": [
+    {
+      "hostPath": "~/pro_coding",
+      "containerPath": "pro_coding",
+      "readonly": false
+    }
+  ]
+}

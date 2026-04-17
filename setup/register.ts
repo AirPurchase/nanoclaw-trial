@@ -8,9 +8,10 @@ import fs from 'fs';
 import path from 'path';
 
 import { STORE_DIR } from '../src/config.ts';
-import { initDatabase, setRegisteredGroup } from '../src/db.ts';
+import { getRegisteredGroup, initDatabase, setRegisteredGroup } from '../src/db.ts';
 import { isValidGroupFolder } from '../src/group-folder.ts';
 import { logger } from '../src/logger.ts';
+import { ContainerConfig } from '../src/types.ts';
 import { emitStatus } from './status.ts';
 
 interface RegisterArgs {
@@ -22,6 +23,7 @@ interface RegisterArgs {
   requiresTrigger: boolean;
   isMain: boolean;
   assistantName: string;
+  containerConfig?: string; // JSON string for ContainerConfig
 }
 
 function parseArgs(args: string[]): RegisterArgs {
@@ -34,6 +36,7 @@ function parseArgs(args: string[]): RegisterArgs {
     requiresTrigger: true,
     isMain: false,
     assistantName: 'Andy',
+    containerConfig: undefined,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -61,6 +64,9 @@ function parseArgs(args: string[]): RegisterArgs {
         break;
       case '--assistant-name':
         result.assistantName = args[++i] || 'Andy';
+        break;
+      case '--container-config':
+        result.containerConfig = args[++i] || '';
         break;
     }
   }
@@ -90,7 +96,7 @@ export async function run(args: string[]): Promise<void> {
     process.exit(4);
   }
 
-  logger.info(parsed, 'Registering channel');
+  logger.info({ ...parsed }, 'Registering channel');
 
   // Ensure data and store directories exist (store/ may not exist on
   // fresh installs that skip WhatsApp auth, which normally creates it)
@@ -100,14 +106,50 @@ export async function run(args: string[]): Promise<void> {
   // Initialize database (creates schema + runs migrations)
   initDatabase();
 
-  setRegisteredGroup(parsed.jid, {
-    name: parsed.name,
-    folder: parsed.folder,
-    trigger: parsed.trigger,
-    added_at: new Date().toISOString(),
-    requiresTrigger: parsed.requiresTrigger,
-    isMain: parsed.isMain,
-  });
+  // Parse containerConfig: prefer --container-config flag, then fall back to
+  // groups/<folder>/container-config.json if present.
+  let containerConfig: ContainerConfig | undefined;
+  if (parsed.containerConfig) {
+    try {
+      containerConfig = JSON.parse(parsed.containerConfig) as ContainerConfig;
+    } catch {
+      logger.error({ raw: parsed.containerConfig }, 'Invalid --container-config JSON');
+      emitStatus('REGISTER_CHANNEL', {
+        STATUS: 'failed',
+        ERROR: 'invalid_container_config_json',
+        LOG: 'logs/setup.log',
+      });
+      process.exit(4);
+    }
+  } else {
+    // Load from groups/main/container-config.json — the canonical workspace mount config,
+    // tracked by git and shared across all groups.
+    const configFile = path.join(projectRoot, 'groups', 'main', 'container-config.json');
+    if (fs.existsSync(configFile)) {
+      try {
+        containerConfig = JSON.parse(fs.readFileSync(configFile, 'utf-8')) as ContainerConfig;
+        logger.info({ configFile }, 'Loaded containerConfig from groups/main/container-config.json');
+      } catch {
+        logger.warn({ configFile }, 'Failed to parse container-config.json — skipping');
+      }
+    }
+  }
+
+  // If only updating containerConfig on an existing group, preserve all other fields
+  const existing = getRegisteredGroup(parsed.jid);
+  const groupToSave = existing && containerConfig && !parsed.name
+    ? { ...existing, containerConfig }
+    : {
+        name: parsed.name,
+        folder: parsed.folder,
+        trigger: parsed.trigger,
+        added_at: new Date().toISOString(),
+        requiresTrigger: parsed.requiresTrigger,
+        isMain: parsed.isMain,
+        containerConfig,
+      };
+
+  setRegisteredGroup(parsed.jid, groupToSave);
 
   logger.info('Wrote registration to SQLite');
 
