@@ -94,14 +94,23 @@ export function initHostExecutor(): void {
   if (fs.existsSync(STATE_FILE)) {
     try {
       const state = JSON.parse(fs.readFileSync(STATE_FILE, 'utf-8'));
-      for (const [name, proc] of Object.entries(state) as [string, ManagedProcess][]) {
+      for (const [name, proc] of Object.entries(state) as [
+        string,
+        ManagedProcess,
+      ][]) {
         if (proc.status === 'running' && isProcessAlive(proc.pid)) {
           processes.set(name, proc);
-          logger.info({ name, pid: proc.pid }, 'Reconnected to running process');
+          logger.info(
+            { name, pid: proc.pid },
+            'Reconnected to running process',
+          );
         } else if (proc.status === 'running') {
           proc.status = 'crashed';
           processes.set(name, proc);
-          logger.warn({ name, pid: proc.pid }, 'Process died while NanoClaw was down');
+          logger.warn(
+            { name, pid: proc.pid },
+            'Process died while NanoClaw was down',
+          );
         }
       }
       saveState();
@@ -124,7 +133,10 @@ export async function runCommand(
   // Validate cwd exists before spawning
   if (!fs.existsSync(cwd)) {
     const result: CommandResult = {
-      id, command, cwd, exitCode: 1,
+      id,
+      command,
+      cwd,
+      exitCode: 1,
       stdout: '',
       stderr: `Working directory does not exist: ${cwd}`,
       durationMs: Date.now() - start,
@@ -147,7 +159,10 @@ export async function runCommand(
     child.on('error', (err) => {
       clearTimeout(timer);
       const result: CommandResult = {
-        id, command, cwd, exitCode: 1,
+        id,
+        command,
+        cwd,
+        exitCode: 1,
         stdout: '',
         stderr: `Spawn error: ${err.message}`,
         durationMs: Date.now() - start,
@@ -176,7 +191,10 @@ export async function runCommand(
         durationMs: Date.now() - start,
       };
       writeResult(id, result);
-      logger.info({ id, exitCode: code, durationMs: result.durationMs }, 'Host command completed');
+      logger.info(
+        { id, exitCode: code, durationMs: result.durationMs },
+        'Host command completed',
+      );
       resolve();
     });
   });
@@ -194,16 +212,30 @@ export function startProcess(
 
   // Validate cwd exists
   if (!fs.existsSync(cwd)) {
-    writeResult(requestId, { name, error: `Working directory does not exist: ${cwd}` });
+    writeResult(requestId, {
+      name,
+      error: `Working directory does not exist: ${cwd}`,
+    });
     logger.warn({ name, cwd }, 'Start process failed: cwd does not exist');
     return;
   }
 
   // Stop existing process with same name
   const existing = processes.get(name);
-  if (existing && existing.status === 'running' && isProcessAlive(existing.pid)) {
-    logger.info({ name, pid: existing.pid }, 'Stopping existing process before restart');
-    try { process.kill(existing.pid, 'SIGTERM'); } catch { /* already dead */ }
+  if (
+    existing &&
+    existing.status === 'running' &&
+    isProcessAlive(existing.pid)
+  ) {
+    logger.info(
+      { name, pid: existing.pid },
+      'Stopping existing process before restart',
+    );
+    try {
+      process.kill(existing.pid, 'SIGTERM');
+    } catch {
+      /* already dead */
+    }
     childRefs.delete(name);
   }
 
@@ -256,7 +288,9 @@ export function startProcess(
       proc.status = code === 0 ? 'stopped' : 'crashed';
       proc.exitCode = code;
       saveState();
-      logStream.write(`\n--- ${name} exited with code ${code} at ${new Date().toISOString()} ---\n`);
+      logStream.write(
+        `\n--- ${name} exited with code ${code} at ${new Date().toISOString()} ---\n`,
+      );
     }
     logStream.end();
     childRefs.delete(name);
@@ -276,16 +310,28 @@ export function stopProcess(requestId: string, name: string): void {
   if (proc.status !== 'running' || !isProcessAlive(proc.pid)) {
     proc.status = 'stopped';
     saveState();
-    writeResult(requestId, { name, status: 'stopped', message: 'Process was not running' });
+    writeResult(requestId, {
+      name,
+      status: 'stopped',
+      message: 'Process was not running',
+    });
     return;
   }
 
-  try { process.kill(proc.pid, 'SIGTERM'); } catch { /* already dead */ }
+  try {
+    process.kill(proc.pid, 'SIGTERM');
+  } catch {
+    /* already dead */
+  }
 
   // Grace period then SIGKILL
   setTimeout(() => {
     if (isProcessAlive(proc.pid)) {
-      try { process.kill(proc.pid, 'SIGKILL'); } catch { /* ok */ }
+      try {
+        process.kill(proc.pid, 'SIGKILL');
+      } catch {
+        /* ok */
+      }
     }
   }, KILL_GRACE_MS);
 
@@ -305,13 +351,24 @@ export function restartProcess(requestId: string, name: string): void {
 
   // Stop first
   if (proc.status === 'running' && isProcessAlive(proc.pid)) {
-    try { process.kill(proc.pid, 'SIGTERM'); } catch { /* ok */ }
+    try {
+      process.kill(proc.pid, 'SIGTERM');
+    } catch {
+      /* ok */
+    }
     if (proc.port) killPort(proc.port);
   }
 
   // Brief delay then restart
   setTimeout(() => {
-    startProcess(requestId, proc.name, proc.command, proc.cwd, proc.env, proc.port);
+    startProcess(
+      requestId,
+      proc.name,
+      proc.command,
+      proc.cwd,
+      proc.env,
+      proc.port,
+    );
   }, 1000);
 }
 
@@ -328,7 +385,11 @@ export function listProcesses(requestId: string): void {
   writeResult(requestId, { processes: list });
 }
 
-export function getProcessLogs(requestId: string, name: string, lines = 100): void {
+export function getProcessLogs(
+  requestId: string,
+  name: string,
+  lines = 100,
+): void {
   ensureDirs();
   const logPath = path.join(LOGS_DIR, `${name}.log`);
   if (!fs.existsSync(logPath)) {

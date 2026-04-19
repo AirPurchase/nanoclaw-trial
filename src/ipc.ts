@@ -477,23 +477,41 @@ export async function processTaskIpc(
         break;
       }
       if (data.requestId && data.command && data.cwd) {
-        hostExecutor.runCommand(data.requestId, data.command, data.cwd, data.timeout);
+        hostExecutor.runCommand(
+          data.requestId,
+          data.command,
+          data.cwd,
+          data.timeout,
+        );
       }
       break;
 
     case 'host_process_start':
       if (!isMain) {
-        logger.warn({ sourceGroup }, 'Unauthorized host_process_start attempt blocked');
+        logger.warn(
+          { sourceGroup },
+          'Unauthorized host_process_start attempt blocked',
+        );
         break;
       }
       if (data.requestId && data.name && data.command && data.cwd) {
-        hostExecutor.startProcess(data.requestId, data.name, data.command, data.cwd, data.env, data.port);
+        hostExecutor.startProcess(
+          data.requestId,
+          data.name,
+          data.command,
+          data.cwd,
+          data.env,
+          data.port,
+        );
       }
       break;
 
     case 'host_process_stop':
       if (!isMain) {
-        logger.warn({ sourceGroup }, 'Unauthorized host_process_stop attempt blocked');
+        logger.warn(
+          { sourceGroup },
+          'Unauthorized host_process_stop attempt blocked',
+        );
         break;
       }
       if (data.requestId && data.name) {
@@ -503,7 +521,10 @@ export async function processTaskIpc(
 
     case 'host_process_restart':
       if (!isMain) {
-        logger.warn({ sourceGroup }, 'Unauthorized host_process_restart attempt blocked');
+        logger.warn(
+          { sourceGroup },
+          'Unauthorized host_process_restart attempt blocked',
+        );
         break;
       }
       if (data.requestId && data.name) {
@@ -513,7 +534,10 @@ export async function processTaskIpc(
 
     case 'host_process_list':
       if (!isMain) {
-        logger.warn({ sourceGroup }, 'Unauthorized host_process_list attempt blocked');
+        logger.warn(
+          { sourceGroup },
+          'Unauthorized host_process_list attempt blocked',
+        );
         break;
       }
       if (data.requestId) {
@@ -523,7 +547,10 @@ export async function processTaskIpc(
 
     case 'host_process_logs':
       if (!isMain) {
-        logger.warn({ sourceGroup }, 'Unauthorized host_process_logs attempt blocked');
+        logger.warn(
+          { sourceGroup },
+          'Unauthorized host_process_logs attempt blocked',
+        );
         break;
       }
       if (data.requestId && data.name) {
