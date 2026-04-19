@@ -202,6 +202,18 @@ function buildVolumeMounts(
     readonly: false,
   });
 
+  // Host executor results and logs — read-only so agent can read command output and process logs
+  if (isMain) {
+    const hostExecDir = path.join(DATA_DIR, 'host-exec');
+    fs.mkdirSync(path.join(hostExecDir, 'results'), { recursive: true });
+    fs.mkdirSync(path.join(hostExecDir, 'logs'), { recursive: true });
+    mounts.push({
+      hostPath: hostExecDir,
+      containerPath: '/workspace/host-exec',
+      readonly: true,
+    });
+  }
+
   // Copy agent-runner source into a per-group writable location so agents
   // can customize it (add tools, change behavior) without affecting other
   // groups. Recompiled on container startup via entrypoint.sh.
@@ -218,13 +230,15 @@ function buildVolumeMounts(
     'agent-runner-src',
   );
   if (fs.existsSync(agentRunnerSrc)) {
-    const srcIndex = path.join(agentRunnerSrc, 'index.ts');
-    const cachedIndex = path.join(groupAgentRunnerDir, 'index.ts');
+    const srcFiles = fs.readdirSync(agentRunnerSrc).filter(f => f.endsWith('.ts'));
     const needsCopy =
       !fs.existsSync(groupAgentRunnerDir) ||
-      !fs.existsSync(cachedIndex) ||
-      (fs.existsSync(srcIndex) &&
-        fs.statSync(srcIndex).mtimeMs > fs.statSync(cachedIndex).mtimeMs);
+      srcFiles.some(f => {
+        const srcFile = path.join(agentRunnerSrc, f);
+        const cachedFile = path.join(groupAgentRunnerDir, f);
+        return !fs.existsSync(cachedFile) ||
+          fs.statSync(srcFile).mtimeMs > fs.statSync(cachedFile).mtimeMs;
+      });
     if (needsCopy) {
       fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
     }
@@ -252,11 +266,17 @@ async function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
   agentIdentifier?: string,
+  extraMountsMap?: Record<string, string>,
 ): Promise<string[]> {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
+
+  // Pass extra mounts mapping so MCP tools can translate container→host paths
+  if (extraMountsMap && Object.keys(extraMountsMap).length > 0) {
+    args.push('-e', `NANOCLAW_EXTRA_MOUNTS=${JSON.stringify(extraMountsMap)}`);
+  }
 
   // OneCLI gateway handles credential injection — containers never see real secrets.
   // The gateway intercepts HTTPS traffic and injects API keys or OAuth tokens.
@@ -311,6 +331,15 @@ export async function runContainerAgent(
   fs.mkdirSync(groupDir, { recursive: true });
 
   const mounts = buildVolumeMounts(group, input.isMain);
+
+  // Build container→host path mapping for additional mounts
+  const extraMountsMap: Record<string, string> = {};
+  for (const m of mounts) {
+    if (m.containerPath.startsWith('/workspace/extra/')) {
+      extraMountsMap[m.containerPath] = m.hostPath;
+    }
+  }
+
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
   // Main group uses the default OneCLI agent; others use their own agent.
@@ -321,6 +350,7 @@ export async function runContainerAgent(
     mounts,
     containerName,
     agentIdentifier,
+    extraMountsMap,
   );
 
   logger.debug(

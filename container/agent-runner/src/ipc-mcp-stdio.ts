@@ -503,6 +503,226 @@ Use available_groups.json to find the JID for a group. The folder name must be c
   },
 );
 
+const HOST_EXEC_DIR = '/workspace/host-exec';
+const RESULTS_DIR = path.join(HOST_EXEC_DIR, 'results');
+const LOGS_DIR = path.join(HOST_EXEC_DIR, 'logs');
+
+// Container→host path mapping for additional mounts
+const extraMounts: Record<string, string> = (() => {
+  try {
+    return JSON.parse(process.env.NANOCLAW_EXTRA_MOUNTS || '{}');
+  } catch {
+    return {};
+  }
+})();
+
+function toHostPath(containerPath: string): string {
+  for (const [cPath, hPath] of Object.entries(extraMounts)) {
+    if (containerPath.startsWith(cPath)) {
+      return containerPath.replace(cPath, hPath);
+    }
+  }
+  return containerPath;
+}
+
+function generateRequestId(): string {
+  return `req-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function pollForResult(requestId: string, timeoutMs: number): Promise<string> {
+  const resultPath = path.join(RESULTS_DIR, `${requestId}.json`);
+  const start = Date.now();
+  return new Promise((resolve, reject) => {
+    const check = () => {
+      if (fs.existsSync(resultPath)) {
+        try {
+          const content = fs.readFileSync(resultPath, 'utf-8');
+          resolve(content);
+        } catch {
+          resolve(JSON.stringify({ error: 'Failed to read result file' }));
+        }
+        return;
+      }
+      if (Date.now() - start > timeoutMs) {
+        reject(new Error(`Timed out waiting for result (${timeoutMs}ms)`));
+        return;
+      }
+      setTimeout(check, 500);
+    };
+    check();
+  });
+}
+
+// --- Host Executor MCP Tools (main group only) ---
+
+server.tool(
+  'run_command',
+  'Run a one-shot command on the host machine and return its output. Use for quick commands like git status, npm install, docker compose up, etc. The command runs in a bash shell.',
+  {
+    command: z.string().describe('The bash command to run'),
+    cwd: z.string().optional().describe('Working directory (container path like /workspace/extra/..., will be translated to host path)'),
+    timeout: z.number().optional().describe('Timeout in milliseconds (default: 60000)'),
+  },
+  async (args) => {
+    if (!isMain) {
+      return { content: [{ type: 'text' as const, text: 'Only the main group can run host commands.' }], isError: true };
+    }
+    const requestId = generateRequestId();
+    const hostCwd = args.cwd ? toHostPath(args.cwd) : undefined;
+    writeIpcFile(TASKS_DIR, {
+      type: 'host_exec',
+      requestId,
+      command: args.command,
+      cwd: hostCwd || process.env.HOME || '/tmp',
+      timeout: args.timeout,
+      timestamp: new Date().toISOString(),
+    });
+    try {
+      const result = await pollForResult(requestId, (args.timeout || 60000) + 5000);
+      return { content: [{ type: 'text' as const, text: result }] };
+    } catch (err) {
+      return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+    }
+  },
+);
+
+server.tool(
+  'start_process',
+  'Start a long-running process on the host (e.g. dev server). The process persists across container sessions. Kills any existing process on the target port before starting.',
+  {
+    name: z.string().describe('Unique name for the process (e.g. "stock-portal")'),
+    command: z.string().describe('The bash command to run (e.g. "yarn start", "yarn develop")'),
+    cwd: z.string().describe('Working directory (container path like /workspace/extra/pro_coding/stock-portal)'),
+    env_json: z.string().optional().describe('Extra environment variables as JSON string (e.g. \'{"PORT": "3000"}\')'),
+    port: z.number().optional().describe('Port the process will listen on — used to kill stale processes before start'),
+  },
+  async (args) => {
+    if (!isMain) {
+      return { content: [{ type: 'text' as const, text: 'Only the main group can start host processes.' }], isError: true };
+    }
+    const requestId = generateRequestId();
+    const envParsed = args.env_json ? JSON.parse(args.env_json) : undefined;
+    writeIpcFile(TASKS_DIR, {
+      type: 'host_process_start',
+      requestId,
+      name: args.name,
+      command: args.command,
+      cwd: toHostPath(args.cwd),
+      env: envParsed,
+      port: args.port,
+      timestamp: new Date().toISOString(),
+    });
+    try {
+      const result = await pollForResult(requestId, 15000);
+      return { content: [{ type: 'text' as const, text: result }] };
+    } catch (err) {
+      return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+    }
+  },
+);
+
+server.tool(
+  'stop_process',
+  'Stop a managed host process by name.',
+  {
+    name: z.string().describe('Name of the process to stop'),
+  },
+  async (args) => {
+    if (!isMain) {
+      return { content: [{ type: 'text' as const, text: 'Only the main group can stop host processes.' }], isError: true };
+    }
+    const requestId = generateRequestId();
+    writeIpcFile(TASKS_DIR, {
+      type: 'host_process_stop',
+      requestId,
+      name: args.name,
+      timestamp: new Date().toISOString(),
+    });
+    try {
+      const result = await pollForResult(requestId, 10000);
+      return { content: [{ type: 'text' as const, text: result }] };
+    } catch (err) {
+      return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+    }
+  },
+);
+
+server.tool(
+  'restart_process',
+  'Restart a managed host process by name. Stops it first, then starts with the same configuration.',
+  {
+    name: z.string().describe('Name of the process to restart'),
+  },
+  async (args) => {
+    if (!isMain) {
+      return { content: [{ type: 'text' as const, text: 'Only the main group can restart host processes.' }], isError: true };
+    }
+    const requestId = generateRequestId();
+    writeIpcFile(TASKS_DIR, {
+      type: 'host_process_restart',
+      requestId,
+      name: args.name,
+      timestamp: new Date().toISOString(),
+    });
+    try {
+      const result = await pollForResult(requestId, 15000);
+      return { content: [{ type: 'text' as const, text: result }] };
+    } catch (err) {
+      return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+    }
+  },
+);
+
+server.tool(
+  'list_processes',
+  'List all managed host processes with their status, PID, port, and start time.',
+  {},
+  async () => {
+    if (!isMain) {
+      return { content: [{ type: 'text' as const, text: 'Only the main group can list host processes.' }], isError: true };
+    }
+    const requestId = generateRequestId();
+    writeIpcFile(TASKS_DIR, {
+      type: 'host_process_list',
+      requestId,
+      timestamp: new Date().toISOString(),
+    });
+    try {
+      const result = await pollForResult(requestId, 5000);
+      return { content: [{ type: 'text' as const, text: result }] };
+    } catch (err) {
+      return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+    }
+  },
+);
+
+server.tool(
+  'read_process_logs',
+  'Read recent log output from a managed host process. Reads directly from the log file.',
+  {
+    name: z.string().describe('Name of the process'),
+    lines: z.number().optional().describe('Number of lines to read from the end (default: 100)'),
+  },
+  async (args) => {
+    if (!isMain) {
+      return { content: [{ type: 'text' as const, text: 'Only the main group can read process logs.' }], isError: true };
+    }
+    const logPath = path.join(LOGS_DIR, `${args.name}.log`);
+    if (!fs.existsSync(logPath)) {
+      return { content: [{ type: 'text' as const, text: `No logs found for "${args.name}". Available logs: ${fs.readdirSync(LOGS_DIR).filter(f => f.endsWith('.log')).map(f => f.replace('.log', '')).join(', ') || 'none'}` }] };
+    }
+    try {
+      const content = fs.readFileSync(logPath, 'utf-8');
+      const allLines = content.split('\n');
+      const n = args.lines || 100;
+      const tail = allLines.slice(-n).join('\n');
+      return { content: [{ type: 'text' as const, text: `Last ${Math.min(n, allLines.length)} lines of ${args.name}:\n\n${tail}` }] };
+    } catch (err) {
+      return { content: [{ type: 'text' as const, text: `Error reading logs: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+    }
+  },
+);
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);

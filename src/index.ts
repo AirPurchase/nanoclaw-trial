@@ -49,6 +49,7 @@ import {
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
+import { initHostExecutor } from './host-executor.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
 import {
   restoreRemoteControl,
@@ -696,6 +697,7 @@ async function main(): Promise<void> {
   }
 
   // Start subsystems (independently of connection handler)
+  initHostExecutor();
   startSchedulerLoop({
     registeredGroups: () => registeredGroups,
     getSessions: () => sessions,

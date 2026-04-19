@@ -7,6 +7,7 @@ import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
 import { AvailableGroup } from './container-runner.js';
 import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
+import * as hostExecutor from './host-executor.js';
 import { logger } from './logger.js';
 import { RegisteredGroup } from './types.js';
 
@@ -173,6 +174,14 @@ export async function processTaskIpc(
     trigger?: string;
     requiresTrigger?: boolean;
     containerConfig?: RegisteredGroup['containerConfig'];
+    // For host executor
+    requestId?: string;
+    command?: string;
+    cwd?: string;
+    timeout?: number;
+    env?: Record<string, string>;
+    port?: number;
+    lines?: number;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -459,6 +468,66 @@ export async function processTaskIpc(
           { data },
           'Invalid register_group request - missing required fields',
         );
+      }
+      break;
+
+    case 'host_exec':
+      if (!isMain) {
+        logger.warn({ sourceGroup }, 'Unauthorized host_exec attempt blocked');
+        break;
+      }
+      if (data.requestId && data.command && data.cwd) {
+        hostExecutor.runCommand(data.requestId, data.command, data.cwd, data.timeout);
+      }
+      break;
+
+    case 'host_process_start':
+      if (!isMain) {
+        logger.warn({ sourceGroup }, 'Unauthorized host_process_start attempt blocked');
+        break;
+      }
+      if (data.requestId && data.name && data.command && data.cwd) {
+        hostExecutor.startProcess(data.requestId, data.name, data.command, data.cwd, data.env, data.port);
+      }
+      break;
+
+    case 'host_process_stop':
+      if (!isMain) {
+        logger.warn({ sourceGroup }, 'Unauthorized host_process_stop attempt blocked');
+        break;
+      }
+      if (data.requestId && data.name) {
+        hostExecutor.stopProcess(data.requestId, data.name);
+      }
+      break;
+
+    case 'host_process_restart':
+      if (!isMain) {
+        logger.warn({ sourceGroup }, 'Unauthorized host_process_restart attempt blocked');
+        break;
+      }
+      if (data.requestId && data.name) {
+        hostExecutor.restartProcess(data.requestId, data.name);
+      }
+      break;
+
+    case 'host_process_list':
+      if (!isMain) {
+        logger.warn({ sourceGroup }, 'Unauthorized host_process_list attempt blocked');
+        break;
+      }
+      if (data.requestId) {
+        hostExecutor.listProcesses(data.requestId);
+      }
+      break;
+
+    case 'host_process_logs':
+      if (!isMain) {
+        logger.warn({ sourceGroup }, 'Unauthorized host_process_logs attempt blocked');
+        break;
+      }
+      if (data.requestId && data.name) {
+        hostExecutor.getProcessLogs(data.requestId, data.name, data.lines);
       }
       break;
 
