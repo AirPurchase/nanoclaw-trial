@@ -282,6 +282,20 @@ async function buildContainerArgs(
     args.push('-e', `NANOCLAW_EXTRA_MOUNTS=${JSON.stringify(extraMountsMap)}`);
   }
 
+  // Forward host dev server ports into the container so Playwright's browser
+  // can reach React/Strapi apps that make API calls to localhost
+  const portForwards = process.env.NANOCLAW_PORT_FORWARDS;
+  if (portForwards) {
+    args.push('-e', `NANOCLAW_PORT_FORWARDS=${portForwards}`);
+  }
+
+  // Host-headed Playwright MCP: if a Playwright SSE server is running on the host,
+  // pass its URL so the container agent connects to it instead of spawning headless
+  const playwrightUrl = process.env.NANOCLAW_PLAYWRIGHT_URL;
+  if (playwrightUrl) {
+    args.push('-e', `NANOCLAW_PLAYWRIGHT_URL=${playwrightUrl}`);
+  }
+
   // OneCLI gateway handles credential injection — containers never see real secrets.
   // The gateway intercepts HTTPS traffic and injects API keys or OAuth tokens.
   const onecliApplied = await onecli.applyContainerConfig(args, {

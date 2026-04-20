@@ -12,6 +12,8 @@ const envConfig = readEnvFile([
   'ONECLI_API_KEY',
   'ANTHROPIC_BASE_URL',
   'ANTHROPIC_AUTH_TOKEN',
+  'NANOCLAW_PORT_FORWARDS',
+  'NANOCLAW_PLAYWRIGHT_URL',
   'TZ',
 ]);
 
@@ -61,6 +63,19 @@ export const ANTHROPIC_BASE_URL =
   process.env.ANTHROPIC_BASE_URL || envConfig.ANTHROPIC_BASE_URL;
 export const ANTHROPIC_AUTH_TOKEN =
   process.env.ANTHROPIC_AUTH_TOKEN || envConfig.ANTHROPIC_AUTH_TOKEN;
+
+// Port forwards for container → host (used by socat in entrypoint)
+const portForwards =
+  process.env.NANOCLAW_PORT_FORWARDS || envConfig.NANOCLAW_PORT_FORWARDS;
+if (portForwards && !process.env.NANOCLAW_PORT_FORWARDS) {
+  process.env.NANOCLAW_PORT_FORWARDS = portForwards;
+}
+
+const playwrightUrl =
+  process.env.NANOCLAW_PLAYWRIGHT_URL || envConfig.NANOCLAW_PLAYWRIGHT_URL;
+if (playwrightUrl && !process.env.NANOCLAW_PLAYWRIGHT_URL) {
+  process.env.NANOCLAW_PLAYWRIGHT_URL = playwrightUrl;
+}
 export const MAX_MESSAGES_PER_PROMPT = Math.max(
   1,
   parseInt(process.env.MAX_MESSAGES_PER_PROMPT || '10', 10) || 10,

@@ -62,7 +62,36 @@ interface SDKUserMessage {
 
 const IPC_INPUT_DIR = '/workspace/ipc/input';
 const IPC_INPUT_CLOSE_SENTINEL = path.join(IPC_INPUT_DIR, '_close');
+const IPC_MESSAGES_DIR = '/workspace/ipc/messages';
 const IPC_POLL_MS = 500;
+
+function sendIpcMessage(containerInput: ContainerInput, text: string): void {
+  try {
+    fs.mkdirSync(IPC_MESSAGES_DIR, { recursive: true });
+    const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`;
+    const filepath = path.join(IPC_MESSAGES_DIR, filename);
+    const tmpPath = filepath + '.tmp';
+    fs.writeFileSync(
+      tmpPath,
+      JSON.stringify(
+        {
+          type: 'message',
+          chatJid: containerInput.chatJid,
+          text,
+          groupFolder: containerInput.groupFolder,
+          timestamp: new Date().toISOString(),
+        },
+        null,
+        2,
+      ),
+    );
+    fs.renameSync(tmpPath, filepath);
+  } catch (err) {
+    log(
+      `Failed to send IPC message: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
 
 /**
  * Push-based async iterable for streaming user messages to the SDK.
@@ -378,6 +407,7 @@ async function runQuery(
   containerInput: ContainerInput,
   sdkEnv: Record<string, string | undefined>,
   resumeAt?: string,
+  skipPlaywrightSSE = false,
 ): Promise<{
   newSessionId?: string;
   lastAssistantUuid?: string;
@@ -389,6 +419,43 @@ async function runQuery(
   // Poll IPC for follow-up messages and _close sentinel during the query
   let ipcPolling = true;
   let closedDuringQuery = false;
+
+  // Heartbeat: track last output time and nudge agent if silent for 3 minutes
+  const HEARTBEAT_INTERVAL_MS = 180_000; // 3 minutes
+  let lastOutputTime = Date.now();
+  let heartbeatCount = 0;
+  let heartbeatActive = true;
+
+  const resetHeartbeat = () => {
+    lastOutputTime = Date.now();
+  };
+  const stopHeartbeat = () => {
+    heartbeatActive = false;
+  };
+
+  const heartbeatCheck = () => {
+    if (!ipcPolling || !heartbeatActive) return;
+    const silentMs = Date.now() - lastOutputTime;
+    if (silentMs >= HEARTBEAT_INTERVAL_MS) {
+      heartbeatCount++;
+      log(
+        `Heartbeat #${heartbeatCount}: no output for ${Math.round(silentMs / 1000)}s, nudging agent`,
+      );
+      // Inject a user-level nudge into the agent's stream
+      stream.push(
+        '[SYSTEM REMINDER] You have not sent a progress update to the user for over 3 minutes. Use mcp__nanoclaw__send_message NOW to update the user on what you are currently doing, what progress has been made, and what remains. This is mandatory — do not skip it.',
+      );
+      // Also send a heartbeat to the user so they know the agent is alive
+      sendIpcMessage(
+        containerInput,
+        `⏳ _Agent is still working (${Math.round(silentMs / 60000)} min since last update)..._`,
+      );
+      resetHeartbeat();
+    }
+    setTimeout(heartbeatCheck, 30_000); // check every 30s
+  };
+  setTimeout(heartbeatCheck, HEARTBEAT_INTERVAL_MS);
+
   const pollIpcDuringQuery = () => {
     if (!ipcPolling) return;
     if (shouldClose()) {
@@ -401,7 +468,12 @@ async function runQuery(
     const messages = drainIpcInput();
     for (const text of messages) {
       log(`Piping IPC message into active query (${text.length} chars)`);
-      stream.push(text);
+      stream.push(
+        `[NEW MESSAGE FROM USER — RESPOND IMMEDIATELY]\nThe user just sent a new message while you are working. You MUST acknowledge this message RIGHT NOW using mcp__nanoclaw__send_message before continuing your current work. If the user is giving new instructions, steering, or asking you to stop/change direction, follow their instructions immediately.\n\n${text}`,
+      );
+      // Restart heartbeat — agent has new work
+      heartbeatActive = true;
+      resetHeartbeat();
     }
     setTimeout(pollIpcDuringQuery, IPC_POLL_MS);
   };
@@ -469,23 +541,69 @@ async function runQuery(
         'Skill',
         'NotebookEdit',
         'mcp__nanoclaw__*',
+        'mcp__playwright__*',
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
       settingSources: ['project', 'user'],
-      mcpServers: {
-        nanoclaw: {
-          command: 'node',
-          args: [mcpServerPath],
-          env: {
-            NANOCLAW_CHAT_JID: containerInput.chatJid,
-            NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
-            NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
-            ...(process.env.NANOCLAW_EXTRA_MOUNTS ? { NANOCLAW_EXTRA_MOUNTS: process.env.NANOCLAW_EXTRA_MOUNTS } : {}),
+      mcpServers: await (async () => {
+        const servers: Record<string, any> = {
+          nanoclaw: {
+            command: 'node',
+            args: [mcpServerPath],
+            env: {
+              NANOCLAW_CHAT_JID: containerInput.chatJid,
+              NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
+              NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
+              ...(process.env.NANOCLAW_EXTRA_MOUNTS
+                ? { NANOCLAW_EXTRA_MOUNTS: process.env.NANOCLAW_EXTRA_MOUNTS }
+                : {}),
+            },
           },
-        },
-      },
+        };
+        const playwrightUrl = process.env.NANOCLAW_PLAYWRIGHT_URL;
+        if (playwrightUrl && !skipPlaywrightSSE) {
+          // Only connect if the host-headed server is already running — don't auto-start it.
+          // The agent calls start_playwright_browser explicitly when it needs a headed browser.
+          try {
+            const probe = await fetch(playwrightUrl.replace('/mcp', '/'), {
+              signal: AbortSignal.timeout(2000),
+            });
+            if (probe.ok || probe.status === 405) {
+              servers.playwright = { url: playwrightUrl };
+              process.stderr.write(
+                `[agent-runner] Playwright MCP: connected to host-headed browser at ${playwrightUrl}\n`,
+              );
+            }
+          } catch {
+            /* not running — will use in-container headless */
+          }
+        }
+        if (!servers.playwright) {
+          process.stderr.write(
+            `[agent-runner] Playwright MCP: using in-container headless (call start_playwright_browser for headed mode)\n`,
+          );
+        }
+        if (!servers.playwright) {
+          servers.playwright = {
+            command: 'npx',
+            args: [
+              '@playwright/mcp',
+              '--headless',
+              '--no-sandbox',
+              '--executable-path',
+              '/usr/bin/chromium',
+              '--viewport-size',
+              '1280x720',
+              '--ignore-https-errors',
+              '--proxy-bypass',
+              'localhost,127.0.0.1',
+            ],
+          };
+        }
+        return servers;
+      })(),
       hooks: {
         PreCompact: [
           { hooks: [createPreCompactHook(containerInput.assistantName)] },
@@ -498,7 +616,28 @@ async function runQuery(
       message.type === 'system'
         ? `system/${(message as { subtype?: string }).subtype}`
         : message.type;
-    log(`[msg #${messageCount}] type=${msgType}`);
+
+    // Log assistant messages with content summary for observability
+    if (message.type === 'assistant' && 'message' in message) {
+      const msg = (message as { message: { content: any[] } }).message;
+      const parts: string[] = [];
+      for (const block of msg.content || []) {
+        if (block.type === 'text' && block.text) {
+          parts.push(
+            `text(${block.text.length}): ${block.text.slice(0, 120).replace(/\n/g, ' ')}`,
+          );
+        } else if (block.type === 'tool_use') {
+          parts.push(
+            `tool: ${block.name}(${JSON.stringify(block.input || {}).slice(0, 100)})`,
+          );
+        } else if (block.type === 'tool_result') {
+          parts.push(`tool_result(${JSON.stringify(block).slice(0, 80)})`);
+        }
+      }
+      log(`[msg #${messageCount}] type=${msgType} ${parts.join(' | ')}`);
+    } else {
+      log(`[msg #${messageCount}] type=${msgType}`);
+    }
 
     if (message.type === 'assistant' && 'uuid' in message) {
       lastAssistantUuid = (message as { uuid: string }).uuid;
@@ -525,6 +664,10 @@ async function runQuery(
 
     if (message.type === 'result') {
       resultCount++;
+      // Task completed — stop heartbeat so the agent can rest without
+      // sending unnecessary 3-min progress messages to the user.
+      // Heartbeat restarts when a new user message arrives (see pollIpcDuringQuery).
+      stopHeartbeat();
       const textResult =
         'result' in message ? (message as { result?: string }).result : null;
       log(
@@ -677,6 +820,7 @@ async function main(): Promise<void> {
 
   // Query loop: run query → wait for IPC message → run new query → repeat
   let resumeAt: string | undefined;
+  let skipPlaywrightSSE = false;
   try {
     while (true) {
       log(
@@ -723,6 +867,143 @@ async function main(): Promise<void> {
     }
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
+    const playwrightUrl = process.env.NANOCLAW_PLAYWRIGHT_URL;
+
+    // If Playwright SSE was active and the SDK crashed, attempt self-recovery
+    if (!skipPlaywrightSSE && playwrightUrl) {
+      log(`Agent error with Playwright SSE active: ${errorMessage}`);
+      log('Attempting Playwright recovery...');
+
+      // Notify user about the crash
+      sendIpcMessage(
+        containerInput,
+        `⚠️ *Playwright browser crashed*\nError: ${errorMessage.slice(0, 200)}\n\nAttempting recovery — restarting the headed browser on the host...`,
+      );
+
+      // Try to restart the host-headed Playwright server via IPC
+      const recoveryRequestId = `recovery-${Date.now()}`;
+      const taskFile = path.join(
+        '/workspace/ipc/tasks',
+        `${Date.now()}-recovery.json`,
+      );
+      const tmpFile = taskFile + '.tmp';
+      fs.writeFileSync(
+        tmpFile,
+        JSON.stringify(
+          {
+            type: 'host_process_start',
+            requestId: recoveryRequestId,
+            name: 'playwright-mcp',
+            command:
+              'npx @playwright/mcp --port 3100 --executable-path "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --viewport-size 1280x720 --ignore-https-errors --proxy-bypass localhost,127.0.0.1',
+            cwd: process.env.HOME || '/tmp',
+            port: 3100,
+            timestamp: new Date().toISOString(),
+          },
+          null,
+          2,
+        ),
+      );
+      fs.renameSync(tmpFile, taskFile);
+      log('Sent IPC request to restart Playwright MCP server on host');
+
+      // Wait for the server to come up (poll for up to 15 seconds)
+      let serverReady = false;
+      for (let i = 0; i < 15; i++) {
+        await new Promise((r) => setTimeout(r, 1000));
+        try {
+          const probe = await fetch(playwrightUrl.replace('/mcp', '/'), {
+            signal: AbortSignal.timeout(1500),
+          });
+          if (probe.ok || probe.status === 405) {
+            serverReady = true;
+            break;
+          }
+        } catch {
+          /* not ready yet */
+        }
+      }
+
+      if (serverReady) {
+        log('Playwright MCP server recovered — retrying with headed browser');
+        sendIpcMessage(
+          containerInput,
+          '✅ *Playwright browser recovered* — headed browser restarted successfully. Resuming work...',
+        );
+
+        // Retry with headed Playwright (skipPlaywrightSSE = false)
+        try {
+          while (true) {
+            log(
+              `Starting query (session: ${sessionId || 'new'}, resumeAt: ${resumeAt || 'latest'}, playwright=recovered-headed)...`,
+            );
+            const queryResult = await runQuery(
+              prompt,
+              sessionId,
+              mcpServerPath,
+              containerInput,
+              sdkEnv,
+              resumeAt,
+              false,
+            );
+            if (queryResult.newSessionId) sessionId = queryResult.newSessionId;
+            if (queryResult.lastAssistantUuid)
+              resumeAt = queryResult.lastAssistantUuid;
+            if (queryResult.closedDuringQuery) {
+              log('Close sentinel consumed during recovery query, exiting');
+              break;
+            }
+            writeOutput({
+              status: 'success',
+              result: null,
+              newSessionId: sessionId,
+            });
+            log('Query ended, waiting for next IPC message...');
+            const nextMessage = await waitForIpcMessage();
+            if (nextMessage === null) {
+              log('Close sentinel received, exiting');
+              break;
+            }
+            log(
+              `Got new message (${nextMessage.length} chars), starting new query`,
+            );
+            prompt = nextMessage;
+          }
+          return;
+        } catch (retryErr) {
+          const retryMsg =
+            retryErr instanceof Error ? retryErr.message : String(retryErr);
+          log(`Agent error after Playwright recovery: ${retryMsg}`);
+          sendIpcMessage(
+            containerInput,
+            `❌ *Recovery failed* — headed browser crashed again: ${retryMsg.slice(0, 200)}\n\nPlease check the Playwright MCP server on the host.`,
+          );
+          writeOutput({
+            status: 'error',
+            result: null,
+            newSessionId: sessionId,
+            error: retryMsg,
+          });
+          process.exit(1);
+        }
+      } else {
+        log(
+          'Playwright MCP server did not recover — cannot restart headed browser',
+        );
+        sendIpcMessage(
+          containerInput,
+          '❌ *Playwright recovery failed* — could not restart the headed browser on the host.\n\nPlease check if Chrome is available and port 3100 is free. You can manually run:\n`npx @playwright/mcp --port 3100`',
+        );
+        writeOutput({
+          status: 'error',
+          result: null,
+          newSessionId: sessionId,
+          error: 'Playwright recovery failed: host server did not start',
+        });
+        process.exit(1);
+      }
+    }
+
     log(`Agent error: ${errorMessage}`);
     writeOutput({
       status: 'error',

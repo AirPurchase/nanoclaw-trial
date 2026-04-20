@@ -573,7 +573,7 @@ server.tool(
       type: 'host_exec',
       requestId,
       command: args.command,
-      cwd: hostCwd || process.env.HOME || '/tmp',
+      cwd: hostCwd || '/tmp',
       timeout: args.timeout,
       timestamp: new Date().toISOString(),
     });
@@ -719,6 +719,57 @@ server.tool(
       return { content: [{ type: 'text' as const, text: `Last ${Math.min(n, allLines.length)} lines of ${args.name}:\n\n${tail}` }] };
     } catch (err) {
       return { content: [{ type: 'text' as const, text: `Error reading logs: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+    }
+  },
+);
+
+server.tool(
+  'start_playwright_browser',
+  'Start a headed Playwright browser on the host machine for visual UI testing and inspection. The browser window is visible to the human developer. Once started, use the mcp__playwright__* tools to navigate, click, fill forms, and take screenshots. The browser persists until you stop it.',
+  {},
+  async () => {
+    if (!isMain) {
+      return { content: [{ type: 'text' as const, text: 'Only the main group can start the Playwright browser.' }], isError: true };
+    }
+    const requestId = generateRequestId();
+    writeIpcFile(TASKS_DIR, {
+      type: 'host_process_start',
+      requestId,
+      name: 'playwright-mcp',
+      command: 'npx @playwright/mcp --port 3100 --executable-path "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --viewport-size 1280x720 --ignore-https-errors --proxy-bypass localhost,127.0.0.1',
+      cwd: '/tmp',
+      port: 3100,
+      timestamp: new Date().toISOString(),
+    });
+    try {
+      const result = await pollForResult(requestId, 10000);
+      return { content: [{ type: 'text' as const, text: `Playwright browser started (headed, visible to human).\n${result}\nUse mcp__playwright__* tools to interact with it.` }] };
+    } catch (err) {
+      return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+    }
+  },
+);
+
+server.tool(
+  'stop_playwright_browser',
+  'Stop the headed Playwright browser on the host.',
+  {},
+  async () => {
+    if (!isMain) {
+      return { content: [{ type: 'text' as const, text: 'Only the main group can stop the Playwright browser.' }], isError: true };
+    }
+    const requestId = generateRequestId();
+    writeIpcFile(TASKS_DIR, {
+      type: 'host_process_stop',
+      requestId,
+      name: 'playwright-mcp',
+      timestamp: new Date().toISOString(),
+    });
+    try {
+      const result = await pollForResult(requestId, 10000);
+      return { content: [{ type: 'text' as const, text: `Playwright browser stopped.\n${result}` }] };
+    } catch (err) {
+      return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
     }
   },
 );
