@@ -588,7 +588,16 @@ server.tool(
 
 server.tool(
   'start_process',
-  'Start a long-running process on the host (e.g. dev server). The process persists across container sessions. Kills any existing process on the target port before starting.',
+  `Start a long-running dev server process on the host inside a tmux session. This is the ONLY correct way to start services.
+
+What it does automatically:
+- Creates a named tmux session (visible to human via Terminal.app)
+- Loads nvm with system default Node (v18) and adds /opt/homebrew/bin to PATH
+- Kills any existing process on the target port
+- Pipes output to log files for capture_terminal and read_process_logs
+- Tracks the process for list_processes, stop_process, restart_process
+
+NEVER use run_command with manual tmux commands — always use this tool.`,
   {
     name: z.string().describe('Unique name for the process (e.g. "stock-portal")'),
     command: z.string().describe('The bash command to run (e.g. "yarn start", "yarn develop")'),
@@ -719,6 +728,87 @@ server.tool(
       return { content: [{ type: 'text' as const, text: `Last ${Math.min(n, allLines.length)} lines of ${args.name}:\n\n${tail}` }] };
     } catch (err) {
       return { content: [{ type: 'text' as const, text: `Error reading logs: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+    }
+  },
+);
+
+server.tool(
+  'capture_terminal',
+  'Capture the current visible terminal output of a managed host process — exactly what a human developer would see in the terminal. Returns the last N lines of the tmux pane. Use this to check process status, see compilation output, error messages, etc.',
+  {
+    name: z.string().describe('Name of the process (e.g. "stock-engine")'),
+    lines: z.number().optional().describe('Number of lines to capture (default: 50)'),
+  },
+  async (args) => {
+    if (!isMain) {
+      return { content: [{ type: 'text' as const, text: 'Only the main group can capture terminal output.' }], isError: true };
+    }
+    const requestId = generateRequestId();
+    writeIpcFile(TASKS_DIR, {
+      type: 'host_capture_terminal',
+      requestId,
+      name: args.name,
+      lines: args.lines,
+      timestamp: new Date().toISOString(),
+    });
+    try {
+      const result = await pollForResult(requestId, 10000);
+      return { content: [{ type: 'text' as const, text: result }] };
+    } catch (err) {
+      return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+    }
+  },
+);
+
+server.tool(
+  'wait_for_output',
+  'Wait for a specific string to appear in a process terminal output. Polls the tmux pane every 2 seconds until the pattern is found or timeout. Use this to wait for services to be ready (e.g. "Welcome back" for Strapi, "Compiled successfully" for React).',
+  {
+    name: z.string().describe('Name of the process (e.g. "stock-engine")'),
+    pattern: z.string().describe('String to wait for (e.g. "Welcome back", "Compiled successfully")'),
+    timeout: z.number().optional().describe('Timeout in milliseconds (default: 60000)'),
+  },
+  async (args) => {
+    if (!isMain) {
+      return { content: [{ type: 'text' as const, text: 'Only the main group can wait for process output.' }], isError: true };
+    }
+    const requestId = generateRequestId();
+    writeIpcFile(TASKS_DIR, {
+      type: 'host_wait_for_output',
+      requestId,
+      name: args.name,
+      pattern: args.pattern,
+      timeout: args.timeout,
+      timestamp: new Date().toISOString(),
+    });
+    try {
+      const result = await pollForResult(requestId, (args.timeout || 60000) + 5000);
+      return { content: [{ type: 'text' as const, text: result }] };
+    } catch (err) {
+      return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+    }
+  },
+);
+
+server.tool(
+  'open_dashboard',
+  'Open a Terminal.app window on the host with a tmux dashboard showing all running service outputs in split panes. The human developer can monitor all services in one window. Call this AFTER all services are confirmed ready.',
+  {},
+  async () => {
+    if (!isMain) {
+      return { content: [{ type: 'text' as const, text: 'Only the main group can open the dashboard.' }], isError: true };
+    }
+    const requestId = generateRequestId();
+    writeIpcFile(TASKS_DIR, {
+      type: 'host_open_dashboard',
+      requestId,
+      timestamp: new Date().toISOString(),
+    });
+    try {
+      const result = await pollForResult(requestId, 10000);
+      return { content: [{ type: 'text' as const, text: result }] };
+    } catch (err) {
+      return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
     }
   },
 );

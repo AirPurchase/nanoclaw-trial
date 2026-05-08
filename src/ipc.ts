@@ -182,6 +182,7 @@ export async function processTaskIpc(
     env?: Record<string, string>;
     port?: number;
     lines?: number;
+    pattern?: string;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -558,7 +559,50 @@ export async function processTaskIpc(
       }
       break;
 
+    case 'host_capture_terminal':
+      if (!isMain) {
+        logger.warn(
+          { sourceGroup },
+          'Unauthorized host_capture_terminal attempt blocked',
+        );
+        break;
+      }
+      if (data.requestId && data.name) {
+        hostExecutor.captureTerminal(data.requestId, data.name, data.lines);
+      }
+      break;
+
+    case 'host_wait_for_output':
+      if (!isMain) {
+        logger.warn(
+          { sourceGroup },
+          'Unauthorized host_wait_for_output attempt blocked',
+        );
+        break;
+      }
+      if (data.requestId && data.name && data.pattern) {
+        hostExecutor.waitForOutput(
+          data.requestId,
+          data.name,
+          data.pattern,
+          data.timeout,
+        );
+      }
+      break;
+
+    case 'host_open_dashboard':
+      if (!isMain) {
+        logger.warn(
+          { sourceGroup },
+          'Unauthorized host_open_dashboard attempt blocked',
+        );
+        break;
+      }
+      if (data.requestId) {
+        hostExecutor.openDashboard(data.requestId);
+      }
+      break;
+
     default:
-      logger.warn({ type: data.type }, 'Unknown IPC task type');
   }
 }
