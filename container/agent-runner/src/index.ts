@@ -511,6 +511,10 @@ async function runQuery(
     prompt: stream,
     options: {
       cwd: '/workspace/group',
+      // NOTE: Under 3rd-party proxy (AIOHub), model pinning may not work —
+      // the proxy controls which model actually serves requests. This is only
+      // a fallback if AIOHub implements model routing (undocumented & questionable).
+      model: process.env.CLAUDE_CODE_USE_MODEL || 'claude-opus-4-7',
       additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
       resume: sessionId,
       resumeSessionAt: resumeAt,
