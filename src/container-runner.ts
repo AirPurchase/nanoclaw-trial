@@ -4,6 +4,7 @@
  */
 import { ChildProcess, spawn } from 'child_process';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 import {
@@ -32,6 +33,37 @@ import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
 
 const onecli = new OneCLI({ url: ONECLI_URL, apiKey: ONECLI_API_KEY });
+
+// Prevent macOS sleep while containers are running
+let caffeinateProc: ChildProcess | null = null;
+let activeContainerCount = 0;
+
+function startCaffeinate(): void {
+  if (os.platform() !== 'darwin' || caffeinateProc) return;
+  caffeinateProc = spawn('caffeinate', ['-dims'], {
+    stdio: 'ignore',
+    detached: true,
+  });
+  caffeinateProc.unref();
+  logger.debug('caffeinate started — preventing macOS sleep');
+}
+
+function stopCaffeinate(): void {
+  if (!caffeinateProc) return;
+  caffeinateProc.kill();
+  caffeinateProc = null;
+  logger.debug('caffeinate stopped — macOS sleep allowed');
+}
+
+function onContainerStart(): void {
+  activeContainerCount++;
+  if (activeContainerCount === 1) startCaffeinate();
+}
+
+function onContainerEnd(): void {
+  activeContainerCount = Math.max(0, activeContainerCount - 1);
+  if (activeContainerCount === 0) stopCaffeinate();
+}
 
 // Sentinel markers for robust output parsing (must match agent-runner)
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
@@ -165,6 +197,10 @@ function buildVolumeMounts(
             // 3rd-party Claude hosting — forward base URL and auth token if configured
             ...(ANTHROPIC_BASE_URL ? { ANTHROPIC_BASE_URL } : {}),
             ...(ANTHROPIC_AUTH_TOKEN ? { ANTHROPIC_AUTH_TOKEN } : {}),
+            // NOTE: Under 3rd-party proxy (AIOHub), model pinning may not work —
+            // the proxy controls which model actually serves requests. This is only
+            // a fallback if AIOHub implements model routing (undocumented & questionable).
+            CLAUDE_CODE_USE_MODEL: 'claude-opus-4-6',
           },
         },
         null,
@@ -276,6 +312,11 @@ async function buildContainerArgs(
 
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
+
+  // NOTE: Under 3rd-party proxy (AIOHub), model pinning may not work —
+  // the proxy controls which model actually serves requests. This is only
+  // a fallback if AIOHub implements model routing (undocumented & questionable).
+  args.push('-e', 'CLAUDE_CODE_USE_MODEL=claude-opus-4-6');
 
   // Pass extra mounts mapping so MCP tools can translate container→host paths
   if (extraMountsMap && Object.keys(extraMountsMap).length > 0) {
@@ -403,6 +444,7 @@ export async function runContainerAgent(
     });
 
     onProcess(container, containerName);
+    onContainerStart();
 
     let stdout = '';
     let stderr = '';
@@ -525,6 +567,7 @@ export async function runContainerAgent(
 
     container.on('close', (code) => {
       clearTimeout(timeout);
+      onContainerEnd();
       const duration = Date.now() - startTime;
 
       if (timedOut) {
