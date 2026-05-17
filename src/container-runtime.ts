@@ -33,28 +33,44 @@ export function stopContainer(name: string): void {
   execSync(`${CONTAINER_RUNTIME_BIN} stop -t 1 ${name}`, { stdio: 'pipe' });
 }
 
-/** Ensure the container runtime is running, starting it if needed. */
+/** Ensure the container runtime is running, retrying with backoff.
+ *  Handles macOS wake-from-sleep where Docker takes time to resume. */
 export function ensureContainerRuntimeRunning(): void {
-  try {
-    execSync(`${CONTAINER_RUNTIME_BIN} info`, {
-      stdio: 'pipe',
-      timeout: 10000,
-    });
-    log.debug('Container runtime already running');
-  } catch (err) {
-    log.error('Failed to reach container runtime', { err });
-    console.error('\n╔════════════════════════════════════════════════════════════════╗');
-    console.error('║  FATAL: Container runtime failed to start                      ║');
-    console.error('║                                                                ║');
-    console.error('║  Agents cannot run without a container runtime. To fix:        ║');
-    console.error('║  1. Ensure Docker is installed and running                     ║');
-    console.error('║  2. Run: docker info                                           ║');
-    console.error('║  3. Restart NanoClaw                                           ║');
-    console.error('╚════════════════════════════════════════════════════════════════╝\n');
-    throw new Error('Container runtime is required but failed to start', {
-      cause: err,
-    });
+  const MAX_RETRIES = 12;
+  const RETRY_DELAY_MS = 5000;
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      execSync(`${CONTAINER_RUNTIME_BIN} info`, {
+        stdio: 'pipe',
+        timeout: 10000,
+      });
+      if (attempt > 0) {
+        log.info('Container runtime became available after retry', { attempt });
+      } else {
+        log.debug('Container runtime already running');
+      }
+      return;
+    } catch {
+      if (attempt < MAX_RETRIES) {
+        if (attempt === 0) {
+          log.warn('Container runtime not ready, waiting for it to start (macOS wake-from-sleep?)...');
+        }
+        execSync(`sleep ${RETRY_DELAY_MS / 1000}`, { stdio: 'ignore' });
+      }
+    }
   }
+
+  log.error('Container runtime not available after 60s of retries');
+  console.error('\n╔════════════════════════════════════════════════════════════════╗');
+  console.error('║  FATAL: Container runtime failed to start                      ║');
+  console.error('║                                                                ║');
+  console.error('║  Agents cannot run without a container runtime. To fix:        ║');
+  console.error('║  1. Ensure Docker is installed and running                     ║');
+  console.error('║  2. Run: docker info                                           ║');
+  console.error('║  3. Restart NanoClaw                                           ║');
+  console.error('╚════════════════════════════════════════════════════════════════╝\n');
+  throw new Error('Container runtime is required but failed to start');
 }
 
 /**
