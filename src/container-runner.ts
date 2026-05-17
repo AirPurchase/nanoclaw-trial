@@ -5,6 +5,7 @@
  */
 import { ChildProcess, execSync, spawn } from 'child_process';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 import { OneCLI } from '@onecli-sh/sdk';
@@ -18,6 +19,9 @@ import {
   ONECLI_API_KEY,
   ONECLI_URL,
   TIMEZONE,
+  PORT_FORWARDS,
+  PLAYWRIGHT_URL,
+  CLAUDE_CODE_USE_MODEL,
 } from './config.js';
 import { materializeContainerJson } from './container-config.js';
 import { getContainerConfig } from './db/container-configs.js';
@@ -48,6 +52,23 @@ import {
 import type { AgentGroup, Session } from './types.js';
 
 const onecli = new OneCLI({ url: ONECLI_URL, apiKey: ONECLI_API_KEY });
+
+let caffeinateProcess: ChildProcess | null = null;
+
+function startCaffeinate(): void {
+  if (caffeinateProcess || os.platform() !== 'darwin') return;
+  caffeinateProcess = spawn('caffeinate', ['-i'], { stdio: 'ignore' });
+  caffeinateProcess.on('error', () => { caffeinateProcess = null; });
+  caffeinateProcess.on('close', () => { caffeinateProcess = null; });
+  log.info('Caffeinate started (preventing idle sleep)');
+}
+
+function stopCaffeinate(): void {
+  if (!caffeinateProcess) return;
+  caffeinateProcess.kill();
+  caffeinateProcess = null;
+  log.info('Caffeinate stopped');
+}
 
 /** Active containers tracked by session ID. */
 const activeContainers = new Map<string, { process: ChildProcess; containerName: string }>();
@@ -158,6 +179,7 @@ async function spawnContainer(session: Session): Promise<void> {
 
   activeContainers.set(session.id, { process: container, containerName });
   markContainerRunning(session.id);
+  if (activeContainers.size === 1) startCaffeinate();
 
   // Log stderr
   container.stderr?.on('data', (data) => {
@@ -178,6 +200,7 @@ async function spawnContainer(session: Session): Promise<void> {
     activeContainers.delete(session.id);
     markContainerStopped(session.id);
     stopTypingRefresh(session.id);
+    if (activeContainers.size === 0) stopCaffeinate();
     log.info('Container exited', { sessionId: session.id, code, containerName });
   });
 
@@ -185,6 +208,7 @@ async function spawnContainer(session: Session): Promise<void> {
     activeContainers.delete(session.id);
     markContainerStopped(session.id);
     stopTypingRefresh(session.id);
+    if (activeContainers.size === 0) stopCaffeinate();
     log.error('Container spawn error', { sessionId: session.id, err });
   });
 }
@@ -411,6 +435,16 @@ async function buildContainerArgs(
   // Everything NanoClaw-specific is in container.json (read by runner at startup).
   args.push('-e', `TZ=${TIMEZONE}`);
 
+  if (CLAUDE_CODE_USE_MODEL) {
+    args.push('-e', `CLAUDE_CODE_USE_MODEL=${CLAUDE_CODE_USE_MODEL}`);
+  }
+  if (PLAYWRIGHT_URL) {
+    args.push('-e', `NANOCLAW_PLAYWRIGHT_URL=${PLAYWRIGHT_URL}`);
+  }
+  if (PORT_FORWARDS) {
+    args.push('-e', `NANOCLAW_PORT_FORWARDS=${PORT_FORWARDS}`);
+  }
+
   // Provider-contributed env vars (e.g. XDG_DATA_HOME, OPENCODE_*, NO_PROXY).
   if (providerContribution.env) {
     for (const [key, value] of Object.entries(providerContribution.env)) {
@@ -449,6 +483,14 @@ async function buildContainerArgs(
       args.push(...readonlyMountArgs(mount.hostPath, mount.containerPath));
     } else {
       args.push('-v', `${mount.hostPath}:${mount.containerPath}`);
+    }
+  }
+
+  // Port forwards for host dev servers (e.g. React, Strapi)
+  if (PORT_FORWARDS) {
+    for (const mapping of PORT_FORWARDS.split(',')) {
+      const trimmed = mapping.trim();
+      if (trimmed) args.push('-p', trimmed.includes(':') ? trimmed : `${trimmed}:${trimmed}`);
     }
   }
 
