@@ -104,6 +104,12 @@ function buildBehaviorSection(): string {
     '',
     '### Always produce output',
     'Every turn MUST produce at least one `<message to="...">` block. Never return only `<internal>` blocks — that results in silence to the user.',
+    '',
+    '### Playwright browser uses localhost',
+    'The Playwright MCP browser runs on the HOST machine. When navigating to dev servers, ALWAYS use `localhost:<port>`. Never use LAN IPs (192.168.x.x) or host.docker.internal. The browser and dev servers are on the same host.',
+    '',
+    '### npx commands require --yes',
+    'When running npx to install/run packages, always use `npx --yes <package>` to avoid interactive prompts that hang in tmux sessions.',
   ].join('\n');
 }
 
