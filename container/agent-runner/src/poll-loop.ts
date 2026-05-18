@@ -407,7 +407,9 @@ function handleEvent(event: ProviderEvent, _routing: RoutingContext): void {
       log(`Session: ${event.continuation}`);
       break;
     case 'result':
-      log(`Result: ${event.text ? event.text.slice(0, 200) : '(empty)'}`);
+      if (event.text) {
+        log(`Result: ${event.text.slice(0, 200)}`);
+      }
       break;
     case 'error':
       log(

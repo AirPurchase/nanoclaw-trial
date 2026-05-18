@@ -329,6 +329,15 @@ export class ClaudeProvider implements AgentProvider {
         } else if (message.type === 'result') {
           const text = 'result' in message ? (message as { result?: string }).result ?? null : null;
           yield { type: 'result', text };
+        } else if (message.type === 'assistant' && (message as { message?: { content?: unknown[] } }).message?.content) {
+          const content = (message as { message: { content: Array<{ type: string; name?: string; input?: unknown }> } }).message.content;
+          for (const block of content) {
+            if (block.type === 'tool_use' && block.name) {
+              const inputStr = block.input ? JSON.stringify(block.input).slice(0, 100) : '';
+              log(`[tool] ${block.name}${inputStr ? ` ${inputStr}` : ''}`);
+            }
+          }
+          yield { type: 'activity' };
         } else if (message.type === 'system' && (message as { subtype?: string }).subtype === 'api_retry') {
           yield { type: 'error', message: 'API retry', retryable: true };
         } else if (message.type === 'system' && (message as { subtype?: string }).subtype === 'rate_limit_event') {
