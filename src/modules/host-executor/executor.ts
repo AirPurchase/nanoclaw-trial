@@ -223,9 +223,37 @@ export function getProcessLogs(name: string, lines?: number): string {
 
 export function openDashboard(): string {
   ensureTmuxServer();
-  const processes = listProcesses();
-  if (processes.length === 0) return 'No running processes to display.';
+  const serviceNames = getServiceSessionNames();
+  if (serviceNames.length === 0) return 'No running processes to display.';
 
+  createDashboardSession(serviceNames);
+  openTerminalWithDashboard();
+  return `Dashboard opened in Terminal.app with ${serviceNames.length} services.`;
+}
+
+function getServiceSessionNames(): string[] {
+  try {
+    const output = execSync(`${TMUX_BIN} list-sessions -F '#{session_name}'`, {
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    return output
+      .trim()
+      .split('\n')
+      .filter(
+        (s) =>
+          s.startsWith(TMUX_SESSION_PREFIX) &&
+          s !== `${TMUX_SESSION_PREFIX}dashboard` &&
+          s !== `${TMUX_SESSION_PREFIX}init` &&
+          s !== `${TMUX_SESSION_PREFIX}playwright-mcp`,
+      )
+      .map((s) => s.replace(TMUX_SESSION_PREFIX, ''));
+  } catch {
+    return [];
+  }
+}
+
+function createDashboardSession(serviceNames: string[]): void {
   const dashSess = `${TMUX_SESSION_PREFIX}dashboard`;
   try {
     execSync(`${TMUX_BIN} kill-session -t ${dashSess}`, { stdio: 'pipe' });
@@ -233,17 +261,79 @@ export function openDashboard(): string {
     /* ok */
   }
 
-  const first = processes[0];
-  execSync(`${TMUX_BIN} new-session -d -s ${dashSess} 'tail -f ${logPath(first.name)} 2>/dev/null || echo "no logs"'`, {
-    stdio: 'pipe',
-  });
+  const firstLog = logPath(serviceNames[0]);
+  execSync(
+    `${TMUX_BIN} new-session -d -s ${dashSess} -x 200 -y 60 'tail -f ${JSON.stringify(firstLog)} 2>/dev/null || echo "waiting for ${serviceNames[0]}..."'`,
+    { stdio: 'pipe' },
+  );
 
-  for (const proc of processes.slice(1)) {
-    execSync(`${TMUX_BIN} split-window -t ${dashSess} 'tail -f ${logPath(proc.name)} 2>/dev/null || echo "no logs"'`, {
-      stdio: 'pipe',
-    });
+  for (let i = 1; i < serviceNames.length; i++) {
+    const file = logPath(serviceNames[i]);
+    const splitDir = i % 2 === 1 ? '-v' : '-h';
+    execSync(
+      `${TMUX_BIN} split-window -t ${dashSess} ${splitDir} 'tail -f ${JSON.stringify(file)} 2>/dev/null || echo "waiting for ${serviceNames[i]}..."'`,
+      { stdio: 'pipe' },
+    );
   }
 
   execSync(`${TMUX_BIN} select-layout -t ${dashSess} tiled`, { stdio: 'pipe' });
-  return `Dashboard created: tmux attach -t ${dashSess}`;
+}
+
+function openTerminalWithDashboard(): void {
+  try {
+    execSync(`osascript -e 'tell app "Terminal" to do script "${TMUX_BIN} attach -t nanoclaw-dashboard"'`, {
+      stdio: 'pipe',
+    });
+  } catch (err) {
+    log.warn('Failed to open Terminal.app with dashboard', { err });
+  }
+}
+
+// ── Auto-open dashboard monitor ──
+
+let dashboardOpen = false;
+let monitorRunning = false;
+
+export function startDashboardMonitor(): void {
+  if (monitorRunning) return;
+  monitorRunning = true;
+
+  const check = () => {
+    try {
+      const tmuxOutput = execSync(`${TMUX_BIN} ls -F "#{session_name} #{session_attached}" 2>/dev/null`, {
+        encoding: 'utf-8',
+      });
+      const lines = tmuxOutput.trim().split('\n').filter(Boolean);
+      const serviceSessions = lines.filter(
+        (l) =>
+          l.startsWith(TMUX_SESSION_PREFIX) &&
+          !l.startsWith(`${TMUX_SESSION_PREFIX}dashboard`) &&
+          !l.startsWith(`${TMUX_SESSION_PREFIX}init`) &&
+          !l.startsWith(`${TMUX_SESSION_PREFIX}playwright`),
+      );
+
+      if (serviceSessions.length >= 3 && !dashboardOpen) {
+        dashboardOpen = true;
+        const names = serviceSessions.map((l) => l.split(' ')[0].replace(TMUX_SESSION_PREFIX, ''));
+        log.info('Auto-opening tmux dashboard', { sessionCount: names.length });
+        createDashboardSession(names);
+        openTerminalWithDashboard();
+      }
+
+      if (serviceSessions.length === 0) {
+        dashboardOpen = false;
+      }
+
+      // Reset if dashboard was closed by user
+      if (dashboardOpen && !lines.some((l) => l.startsWith(`${TMUX_SESSION_PREFIX}dashboard`))) {
+        dashboardOpen = false;
+      }
+    } catch {
+      /* tmux not running */
+    }
+
+    setTimeout(check, 10_000);
+  };
+
+  setTimeout(check, 10_000);
 }
