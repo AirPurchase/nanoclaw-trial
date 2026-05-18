@@ -142,6 +142,24 @@ export function notifyAgent(session: Session, text: string): void {
   }
 }
 
+/**
+ * Like notifyAgent but uses trigger=0 (context-only, no wake). Use when the
+ * container is already running and the follow-up poll will pick up the message.
+ * Avoids flooding the active query with redundant wake signals.
+ */
+export function notifyAgentQuiet(session: Session, text: string): void {
+  writeSessionMessage(session.agent_group_id, session.id, {
+    id: `sys-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    kind: 'chat',
+    timestamp: new Date().toISOString(),
+    platformId: session.agent_group_id,
+    channelType: 'agent',
+    threadId: null,
+    content: JSON.stringify({ text, sender: 'system', senderId: 'system' }),
+    trigger: 0,
+  });
+}
+
 export interface RequestApprovalOptions {
   session: Session;
   agentName: string;
