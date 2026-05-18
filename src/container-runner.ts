@@ -58,8 +58,12 @@ let caffeinateProcess: ChildProcess | null = null;
 function startCaffeinate(): void {
   if (caffeinateProcess || os.platform() !== 'darwin') return;
   caffeinateProcess = spawn('caffeinate', ['-i'], { stdio: 'ignore' });
-  caffeinateProcess.on('error', () => { caffeinateProcess = null; });
-  caffeinateProcess.on('close', () => { caffeinateProcess = null; });
+  caffeinateProcess.on('error', () => {
+    caffeinateProcess = null;
+  });
+  caffeinateProcess.on('close', () => {
+    caffeinateProcess = null;
+  });
   log.info('Caffeinate started (preventing idle sleep)');
 }
 
@@ -445,12 +449,8 @@ async function buildContainerArgs(
     args.push('-e', `NANOCLAW_PORT_FORWARDS=${PORT_FORWARDS}`);
   }
 
-  // Provider-contributed env vars (e.g. XDG_DATA_HOME, OPENCODE_*, NO_PROXY).
-  if (providerContribution.env) {
-    for (const [key, value] of Object.entries(providerContribution.env)) {
-      args.push('-e', `${key}=${value}`);
-    }
-  }
+  // Provider-contributed env vars are applied AFTER OneCLI below so they
+  // can override OneCLI's ANTHROPIC_API_KEY=placeholder when using a custom endpoint.
 
   // OneCLI gateway — injects HTTPS_PROXY + certs so container API calls
   // are routed through the agent vault for credential injection. Treated as
@@ -465,6 +465,14 @@ async function buildContainerArgs(
     throw new Error('OneCLI gateway not applied — refusing to spawn container without credentials');
   }
   log.info('OneCLI gateway applied', { containerName });
+
+  // Provider-contributed env vars (e.g. ANTHROPIC_BASE_URL, ANTHROPIC_API_KEY, NO_PROXY).
+  // Applied after OneCLI so custom endpoint credentials override the placeholder.
+  if (providerContribution.env) {
+    for (const [key, value] of Object.entries(providerContribution.env)) {
+      args.push('-e', `${key}=${value}`);
+    }
+  }
 
   // Host gateway
   args.push(...hostGatewayArgs());

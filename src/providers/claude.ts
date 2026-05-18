@@ -1,28 +1,27 @@
 /**
- * Claude provider container config — only registered when the user has
- * configured a custom Anthropic-compatible endpoint via setup. Setup
- * appends `import './claude.js'` to providers/index.ts at that point;
- * standard installs hitting api.anthropic.com don't need this file
- * loaded.
+ * Claude provider container config — passes ANTHROPIC_BASE_URL and
+ * credentials into the container when a custom endpoint is configured.
  *
- * The real auth token never enters the container. Setup creates an
- * OneCLI generic secret (host-pattern = base URL hostname, header-name
- * = Authorization, value-format = "Bearer {value}") so the proxy
- * rewrites the Authorization header on the wire. The container only
- * needs:
- *   - ANTHROPIC_BASE_URL — so the SDK knows where to call
- *   - ANTHROPIC_AUTH_TOKEN=placeholder — so the SDK adds an
- *     Authorization: Bearer header for OneCLI to overwrite
+ * When ANTHROPIC_AUTH_TOKEN is set in .env (3rd-party hosting), the real
+ * token is passed as ANTHROPIC_API_KEY and NO_PROXY bypasses OneCLI so
+ * the request reaches the custom endpoint directly.
  */
 import { readEnvFile } from '../env.js';
 import { registerProviderContainerConfig } from './provider-container-registry.js';
 
 registerProviderContainerConfig('claude', () => {
-  const dotenv = readEnvFile(['ANTHROPIC_BASE_URL']);
+  const dotenv = readEnvFile(['ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN']);
   const env: Record<string, string> = {};
   if (dotenv.ANTHROPIC_BASE_URL) {
     env.ANTHROPIC_BASE_URL = dotenv.ANTHROPIC_BASE_URL;
-    env.ANTHROPIC_AUTH_TOKEN = 'placeholder';
+    if (dotenv.ANTHROPIC_AUTH_TOKEN) {
+      env.ANTHROPIC_API_KEY = dotenv.ANTHROPIC_AUTH_TOKEN;
+      const hostname = new URL(dotenv.ANTHROPIC_BASE_URL).hostname;
+      env.NO_PROXY = hostname;
+      env.no_proxy = hostname;
+    } else {
+      env.ANTHROPIC_AUTH_TOKEN = 'placeholder';
+    }
   }
   return { env };
 });
