@@ -143,15 +143,14 @@ export function notifyAgent(session: Session, text: string): void {
 }
 
 /**
- * Like notifyAgent but uses trigger=0 and kind='system'. The follow-up poll
- * skips system messages (they're context for the next fresh turn, not
- * mid-turn interrupts). Use for host-executor results that the agent will
- * see when it next polls, without disrupting the current active query.
+ * Like notifyAgent but uses trigger=0 (context-only, no wake). Use when the
+ * container is already running and the follow-up poll will pick up the message.
+ * Avoids creating redundant wake signals.
  */
 export function notifyAgentQuiet(session: Session, text: string): void {
   writeSessionMessage(session.agent_group_id, session.id, {
     id: `sys-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    kind: 'system',
+    kind: 'chat',
     timestamp: new Date().toISOString(),
     platformId: session.agent_group_id,
     channelType: 'agent',
