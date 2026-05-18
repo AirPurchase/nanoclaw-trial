@@ -221,6 +221,35 @@ export function getProcessLogs(name: string, lines?: number): string {
   }
 }
 
+export function stopAll(): string[] {
+  ensureTmuxServer();
+  const names = getServiceSessionNames();
+  for (const name of names) {
+    stopProcess(name);
+  }
+  return names;
+}
+
+export interface BatchStartEntry {
+  name: string;
+  command: string;
+  cwd?: string;
+  port?: number;
+  readyPattern?: string;
+  readyTimeout?: number;
+}
+
+export function startAll(entries: BatchStartEntry[]): Array<{ name: string; pid: number; ready: boolean }> {
+  ensureTmuxServer();
+  ensureLogsDir();
+  const results: Array<{ name: string; pid: number; ready: boolean }> = [];
+  for (const entry of entries) {
+    const result = startProcess(entry);
+    results.push({ name: entry.name, pid: result.pid, ready: result.ready });
+  }
+  return results;
+}
+
 export function openDashboard(): string {
   ensureTmuxServer();
   const serviceNames = getServiceSessionNames();

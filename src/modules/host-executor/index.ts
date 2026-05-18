@@ -9,6 +9,8 @@ import {
   handleWaitForOutput,
   handleGetProcessLogs,
   handleOpenDashboard,
+  handleStopAll,
+  handleStartAll,
 } from './actions.js';
 import { startDashboardMonitor } from './executor.js';
 
@@ -21,5 +23,7 @@ registerDeliveryAction('host_capture_terminal', handleCaptureTerminal);
 registerDeliveryAction('host_wait_for_output', handleWaitForOutput);
 registerDeliveryAction('host_get_process_logs', handleGetProcessLogs);
 registerDeliveryAction('host_open_dashboard', handleOpenDashboard);
+registerDeliveryAction('host_stop_all', handleStopAll);
+registerDeliveryAction('host_start_all', handleStartAll);
 
 startDashboardMonitor();

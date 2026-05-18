@@ -223,6 +223,61 @@ const hostOpenDashboard: McpToolDefinition = {
   },
 };
 
+const hostStopAll: McpToolDefinition = {
+  tool: {
+    name: 'host_stop_all',
+    description: 'Stop ALL running nanoclaw service processes at once. Much faster than stopping individually.',
+    inputSchema: { type: 'object' as const, properties: {} },
+  },
+  async handler() {
+    writeMessageOut({
+      id: generateId(),
+      kind: 'system',
+      content: JSON.stringify({ action: 'host_stop_all' }),
+    });
+    return ok('Stop-all request submitted. Result will arrive as a message.');
+  },
+};
+
+const hostStartAll: McpToolDefinition = {
+  tool: {
+    name: 'host_start_all',
+    description: 'Start multiple named processes in one batch. Much faster than starting individually. Each entry needs name, command, and optionally cwd, port, readyPattern.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        entries: {
+          type: 'array',
+          description: 'Array of process configs to start',
+          items: {
+            type: 'object',
+            properties: {
+              name: { type: 'string', description: 'Process name' },
+              command: { type: 'string', description: 'Shell command' },
+              cwd: { type: 'string', description: 'Working directory' },
+              port: { type: 'number', description: 'Port to kill before starting' },
+              readyPattern: { type: 'string', description: 'Wait for this output before reporting ready' },
+              readyTimeout: { type: 'number', description: 'Max ms to wait for readyPattern (default 15000)' },
+            },
+            required: ['name', 'command'],
+          },
+        },
+      },
+      required: ['entries'],
+    },
+  },
+  async handler(args) {
+    const entries = args.entries as unknown[];
+    if (!entries || !Array.isArray(entries) || entries.length === 0) return err('entries array is required');
+    writeMessageOut({
+      id: generateId(),
+      kind: 'system',
+      content: JSON.stringify({ action: 'host_start_all', entries }),
+    });
+    return ok(`Start-all request submitted for ${entries.length} processes. Result will arrive as a message.`);
+  },
+};
+
 registerTools([
   hostRunCommand,
   hostStartProcess,
@@ -233,4 +288,6 @@ registerTools([
   hostWaitForOutput,
   hostGetProcessLogs,
   hostOpenDashboard,
+  hostStopAll,
+  hostStartAll,
 ]);

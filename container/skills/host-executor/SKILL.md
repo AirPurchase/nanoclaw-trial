@@ -18,18 +18,30 @@ You have access to host-side process management tools. These run commands direct
 - `host_wait_for_output` — Wait for specific text to appear in process output
 - `host_get_process_logs` — Get recent log output from a process
 - `host_open_dashboard` — Create a tmux dashboard showing all processes
+- `host_stop_all` — Stop ALL running service processes at once
+- `host_start_all` — Start multiple processes in one batch call
+
+## Batch Operations (PREFERRED)
+
+When starting or stopping multiple services, ALWAYS use batch tools:
+
+- `host_stop_all` — kills all running nanoclaw-* tmux sessions in one call
+- `host_start_all` — starts multiple processes in one call with an `entries` array
+
+These are **much faster** than calling individual start/stop for each process. Each individual tool call has ~2-3s of round-trip overhead. Batch operations do everything in a single round-trip.
+
+Example `host_start_all` entries:
+```json
+{ "entries": [
+  { "name": "stock-engine", "command": "yarn develop", "cwd": "/path/to/stock-engine", "readyPattern": "listening on" },
+  { "name": "stock-portal", "command": "yarn start", "cwd": "/path/to/stock-portal", "readyPattern": "Compiled successfully" }
+]}
+```
 
 ## Behavior
 
 All tools are **fire-and-forget**. They submit a request to the host and the result arrives as a chat message from the system. Do not expect an immediate return value — wait for the system message with the result.
 
-## When to Use
-
-- Starting dev servers, databases, or build processes
-- Running host commands that need access to the host filesystem or network
-- Monitoring long-running services (capture terminal, wait for output)
-- Managing multiple services for a project (start, stop, restart, dashboard)
-
 ## Process Naming
 
-Use descriptive, short names for processes (e.g., `frontend`, `api`, `db`, `worker`). Names are used as tmux session identifiers.
+Use descriptive, short names for processes (e.g., `stock-engine`, `stock-portal`, `tenant-man-engine`). Names are used as tmux session identifiers.

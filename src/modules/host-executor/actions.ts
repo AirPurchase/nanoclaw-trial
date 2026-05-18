@@ -145,3 +145,29 @@ export async function handleOpenDashboard(_content: Record<string, unknown>, ses
   const result = executor.openDashboard();
   notifyAgentQuiet(session, result);
 }
+
+export async function handleStopAll(_content: Record<string, unknown>, session: Session): Promise<void> {
+  log.info('Host stop_all', { sessionId: session.id });
+  const stopped = executor.stopAll();
+  if (stopped.length === 0) {
+    notifyAgentQuiet(session, 'No running processes to stop.');
+  } else {
+    notifyAgentQuiet(session, `Stopped ${stopped.length} processes: ${stopped.join(', ')}`);
+  }
+}
+
+export async function handleStartAll(content: Record<string, unknown>, session: Session): Promise<void> {
+  const entries = content.entries as executor.BatchStartEntry[];
+  if (!entries || !Array.isArray(entries) || entries.length === 0) {
+    notifyAgentQuiet(session, 'host_start_all failed: entries array is required.');
+    return;
+  }
+  log.info('Host start_all', { sessionId: session.id, count: entries.length });
+  try {
+    const results = executor.startAll(entries);
+    const lines = results.map((r) => `• ${r.name} (PID ${r.pid}) — ${r.ready ? 'ready' : 'started'}`);
+    notifyAgentQuiet(session, `Started ${results.length} processes:\n${lines.join('\n')}`);
+  } catch (err) {
+    notifyAgentQuiet(session, `host_start_all failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
