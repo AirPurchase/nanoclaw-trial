@@ -451,6 +451,7 @@ function dispatchResultText(text: string, routing: RoutingContext): { sent: numb
       continue;
     }
     sendToDestination(dest, body, routing);
+    log(`[sent to="${toName}"] ${body.slice(0, 500)}${body.length > 500 ? '…' : ''}`);
     sent++;
   }
   if (lastIndex < text.length) {
