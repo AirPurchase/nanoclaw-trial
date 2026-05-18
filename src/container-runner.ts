@@ -445,9 +445,6 @@ async function buildContainerArgs(
   if (PLAYWRIGHT_URL) {
     args.push('-e', `NANOCLAW_PLAYWRIGHT_URL=${PLAYWRIGHT_URL}`);
   }
-  if (PORT_FORWARDS) {
-    args.push('-e', `NANOCLAW_PORT_FORWARDS=${PORT_FORWARDS}`);
-  }
 
   // Provider-contributed env vars are applied AFTER OneCLI below so they
   // can override OneCLI's ANTHROPIC_API_KEY=placeholder when using a custom endpoint.
@@ -491,14 +488,6 @@ async function buildContainerArgs(
       args.push(...readonlyMountArgs(mount.hostPath, mount.containerPath));
     } else {
       args.push('-v', `${mount.hostPath}:${mount.containerPath}`);
-    }
-  }
-
-  // Port forwards for host dev servers (e.g. React, Strapi)
-  if (PORT_FORWARDS) {
-    for (const mapping of PORT_FORWARDS.split(',')) {
-      const trimmed = mapping.trim();
-      if (trimmed) args.push('-p', trimmed.includes(':') ? trimmed : `${trimmed}:${trimmed}`);
     }
   }
 
