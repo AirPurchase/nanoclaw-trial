@@ -87,8 +87,24 @@ export function buildSystemPromptAddendum(assistantName?: string): string {
   }
 
   sections.push(buildDestinationsSection());
+  sections.push(buildBehaviorSection());
 
   return sections.join('\n\n');
+}
+
+function buildBehaviorSection(): string {
+  return [
+    '## Critical behavior rules',
+    '',
+    '### Progress updates (MANDATORY)',
+    'When working on ANY task taking more than 3 minutes, call `mcp__nanoclaw__send_message` every 3 minutes with what you completed, what you are doing now, and what remains. Never work silently for more than 3 minutes.',
+    '',
+    '### Follow-up messages',
+    'When a follow-up message arrives mid-task, IMMEDIATELY acknowledge it with `mcp__nanoclaw__send_message`. If it steers or updates your work, adjust accordingly. Never ignore follow-up messages.',
+    '',
+    '### Always produce output',
+    'Every turn MUST produce at least one `<message to="...">` block. Never return only `<internal>` blocks — that results in silence to the user.',
+  ].join('\n');
 }
 
 function buildDestinationsSection(): string {
