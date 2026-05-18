@@ -40,8 +40,14 @@ export async function handleStartProcess(content: Record<string, unknown>, sessi
       cwd: content.cwd as string | undefined,
       env: content.env as Record<string, string> | undefined,
       port: content.port as number | undefined,
+      readyPattern: content.readyPattern as string | undefined,
+      readyTimeout: content.readyTimeout as number | undefined,
     });
-    notifyAgent(session, `Process "${name}" started. PID: ${result.pid}`);
+    if (result.output) {
+      notifyAgent(session, `Process "${name}" started (PID ${result.pid}). Ready: ${result.ready}\n${result.output}`);
+    } else {
+      notifyAgent(session, `Process "${name}" started. PID: ${result.pid}`);
+    }
   } catch (err) {
     notifyAgent(session, `host_start_process failed: ${err instanceof Error ? err.message : String(err)}`);
   }

@@ -42,7 +42,7 @@ const hostRunCommand: McpToolDefinition = {
 const hostStartProcess: McpToolDefinition = {
   tool: {
     name: 'host_start_process',
-    description: 'Start a named long-running process on the host in a tmux session.',
+    description: 'Start a named long-running process on the host in a tmux session. Optionally waits for a ready pattern in the output before returning.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -51,6 +51,8 @@ const hostStartProcess: McpToolDefinition = {
         cwd: { type: 'string', description: 'Working directory' },
         env: { type: 'object', description: 'Environment variables (key-value pairs)' },
         port: { type: 'number', description: 'Port to kill before starting (optional)' },
+        readyPattern: { type: 'string', description: 'Wait for this text in output before reporting ready (e.g. "Compiled successfully", "listening on")' },
+        readyTimeout: { type: 'number', description: 'Max ms to wait for readyPattern (default 15000)' },
       },
       required: ['name', 'command'],
     },

@@ -58,7 +58,9 @@ export function startProcess(opts: {
   cwd?: string;
   env?: Record<string, string>;
   port?: number;
-}): { pid: number } {
+  readyPattern?: string;
+  readyTimeout?: number;
+}): { pid: number; ready: boolean; output?: string } {
   ensureLogsDir();
   ensureTmuxServer();
   const sess = sessionName(opts.name);
@@ -100,7 +102,13 @@ export function startProcess(opts: {
   const pid = parseInt(pidStr, 10) || 0;
 
   log.info('Host process started', { name: opts.name, pid, command: opts.command, cwd });
-  return { pid };
+
+  if (opts.readyPattern) {
+    const result = waitForOutput(opts.name, opts.readyPattern, opts.readyTimeout || 15_000);
+    return { pid, ready: result.found, output: result.output.slice(-2000) };
+  }
+
+  return { pid, ready: true };
 }
 
 export function stopProcess(name: string): void {
@@ -119,7 +127,9 @@ export function restartProcess(opts: {
   cwd?: string;
   env?: Record<string, string>;
   port?: number;
-}): { pid: number } {
+  readyPattern?: string;
+  readyTimeout?: number;
+}): { pid: number; ready: boolean; output?: string } {
   stopProcess(opts.name);
   return startProcess(opts);
 }
