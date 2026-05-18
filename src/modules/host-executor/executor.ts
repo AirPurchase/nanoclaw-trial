@@ -21,6 +21,16 @@ function ensureLogsDir(): void {
   fs.mkdirSync(LOGS_DIR, { recursive: true });
 }
 
+function ensureTmuxServer(): void {
+  try {
+    execSync(`${TMUX_BIN} has-session 2>/dev/null`, { stdio: 'pipe' });
+  } catch {
+    // No tmux server running — start one with a detached session
+    execSync(`${TMUX_BIN} new-session -d -s nanoclaw-init`, { stdio: 'pipe' });
+    log.info('Started tmux server');
+  }
+}
+
 function sessionName(name: string): string {
   return `${TMUX_SESSION_PREFIX}${name}`;
 }
@@ -50,6 +60,7 @@ export function startProcess(opts: {
   port?: number;
 }): { pid: number } {
   ensureLogsDir();
+  ensureTmuxServer();
   const sess = sessionName(opts.name);
   const cwd = opts.cwd || process.cwd();
   const logFile = logPath(opts.name);
@@ -114,6 +125,7 @@ export function restartProcess(opts: {
 }
 
 export function listProcesses(): ProcessInfo[] {
+  ensureTmuxServer();
   try {
     const output = execSync(`${TMUX_BIN} list-sessions -F '#{session_name}'`, {
       encoding: 'utf-8',
@@ -163,6 +175,7 @@ export function runCommand(command: string, opts?: { cwd?: string; timeout?: num
 }
 
 export function captureTerminal(name: string, lines?: number): string {
+  ensureTmuxServer();
   const sess = sessionName(name);
   const lineCount = lines || 100;
   try {
@@ -199,6 +212,7 @@ export function getProcessLogs(name: string, lines?: number): string {
 }
 
 export function openDashboard(): string {
+  ensureTmuxServer();
   const processes = listProcesses();
   if (processes.length === 0) return 'No running processes to display.';
 
