@@ -38,6 +38,7 @@ import {
   getMessageForRetry,
   getProcessingClaims,
   markMessageFailed,
+  insertMessage,
   retryWithBackoff,
   syncProcessingAcks,
   type ContainerState,
@@ -192,6 +193,13 @@ async function sweepSession(session: Session): Promise<void> {
       enforceRunningContainerSla(inDb, outDb, session, agentGroup.id);
     }
 
+    // 3b. Heartbeat reminder: if container is alive and no message has been
+    // delivered in 3 minutes, inject a reminder into inbound.db so the agent
+    // is forced to send a progress update.
+    if (alive) {
+      injectHeartbeatReminderIfSilent(inDb, session);
+    }
+
     // 4. Crashed-container cleanup: processing rows left behind get retried.
     // Only fires when wake in step 2 didn't pick up the work (no due messages,
     // or wake failed). resetStuckProcessingRows itself is idempotent — it
@@ -325,4 +333,55 @@ function resetStuckProcessingRows(
   } finally {
     if (ownsDb) useDb?.close();
   }
+}
+
+const HEARTBEAT_REMINDER_MS = 3 * 60 * 1000;
+const lastReminderSent = new Map<string, number>();
+
+function injectHeartbeatReminderIfSilent(inDb: Database.Database, session: Session): void {
+  // Check last delivery time from the delivered table
+  let lastDeliveryMs = 0;
+  try {
+    const row = inDb.prepare("SELECT MAX(delivered_at) as last FROM delivered WHERE status='delivered'").get() as { last: string | null } | undefined;
+    if (row?.last) {
+      lastDeliveryMs = parseSqliteUtc(row.last);
+    }
+  } catch {
+    return;
+  }
+
+  const now = Date.now();
+
+  // Don't inject if we delivered something recently
+  if (lastDeliveryMs > 0 && now - lastDeliveryMs < HEARTBEAT_REMINDER_MS) return;
+
+  // Don't inject if we already sent a reminder recently (avoid flooding)
+  const lastReminder = lastReminderSent.get(session.id) || 0;
+  if (now - lastReminder < HEARTBEAT_REMINDER_MS) return;
+
+  // Don't inject if the container just started (give it 3 min grace)
+  const hbMtime = heartbeatMtimeMs(session.agent_group_id, session.id);
+  if (hbMtime === 0) return;
+  const containerAge = now - hbMtime;
+  if (containerAge < 10_000) return; // heartbeat touched < 10s ago means it's actively working
+
+  lastReminderSent.set(session.id, now);
+
+  log.info('Injecting heartbeat reminder (3min silence)', { sessionId: session.id });
+  insertMessage(inDb, {
+    id: `heartbeat-${now}`,
+    kind: 'chat',
+    timestamp: new Date().toISOString(),
+    platformId: session.agent_group_id,
+    channelType: 'agent',
+    threadId: null,
+    content: JSON.stringify({
+      text: '[SYSTEM REMINDER — 3 MINUTES WITHOUT UPDATE] You MUST send a progress update NOW using mcp__nanoclaw__send_message. Report what you completed, what you are doing, and what remains.',
+      sender: 'system',
+      senderId: 'system',
+    }),
+    processAfter: null,
+    recurrence: null,
+    trigger: 0,
+  });
 }
