@@ -57,6 +57,12 @@ export class TelegramChannel implements Channel {
     this.opts = opts;
   }
 
+  private makeJid(chatId: number | string): string {
+    if (this.name === 'telegram') return `tg:${chatId}`;
+    const suffix = this.name.replace('telegram:', '');
+    return `tg:${suffix}:${chatId}`;
+  }
+
   /**
    * Download a Telegram file to the group's attachments directory.
    * Returns the container-relative path (e.g. /workspace/group/attachments/photo_123.jpg)
@@ -125,7 +131,7 @@ export class TelegramChannel implements Channel {
           : (ctx.chat as any).title || 'Unknown';
 
       ctx.reply(
-        `Chat ID: \`tg:${chatId}\`\nName: ${chatName}\nType: ${chatType}`,
+        `Chat ID: \`${this.makeJid(chatId)}\`\nName: ${chatName}\nType: ${chatType}`,
         { parse_mode: 'Markdown' },
       );
     });
@@ -145,7 +151,7 @@ export class TelegramChannel implements Channel {
         if (TELEGRAM_BOT_COMMANDS.has(cmd)) return;
       }
 
-      const chatJid = `tg:${ctx.chat.id}`;
+      const chatJid = this.makeJid(ctx.chat.id);
       let content = ctx.message.text;
       const timestamp = new Date(ctx.message.date * 1000).toISOString();
       const senderName =
@@ -241,7 +247,7 @@ export class TelegramChannel implements Channel {
       placeholder: string,
       opts?: { fileId?: string; filename?: string },
     ) => {
-      const chatJid = `tg:${ctx.chat.id}`;
+      const chatJid = this.makeJid(ctx.chat.id);
       const group = this.opts.registeredGroups()[chatJid];
       if (!group) return;
 
@@ -373,7 +379,7 @@ export class TelegramChannel implements Channel {
     }
 
     try {
-      const numericId = jid.replace(/^tg:/, '');
+      const numericId = jid.split(':').pop()!;
       const options = threadId
         ? { message_thread_id: parseInt(threadId, 10) }
         : {};
@@ -406,7 +412,17 @@ export class TelegramChannel implements Channel {
   }
 
   ownsJid(jid: string): boolean {
-    return jid.startsWith('tg:');
+    if (!jid.startsWith('tg:')) return false;
+    const groups = this.opts.registeredGroups();
+    const group = groups[jid];
+    if (!group) {
+      // Unregistered JID — default telegram channel claims it for /chatid etc.
+      return this.name === 'telegram';
+    }
+    // If group has explicit channel assignment, only that channel owns it
+    if (group.channel) return group.channel === this.name;
+    // No explicit assignment — default telegram channel owns it
+    return this.name === 'telegram';
   }
 
   async disconnect(): Promise<void> {
@@ -420,7 +436,7 @@ export class TelegramChannel implements Channel {
   async setTyping(jid: string, isTyping: boolean): Promise<void> {
     if (!this.bot || !isTyping) return;
     try {
-      const numericId = jid.replace(/^tg:/, '');
+      const numericId = jid.split(':').pop()!;
       await this.bot.api.sendChatAction(numericId, 'typing');
     } catch (err) {
       logger.debug({ jid, err }, 'Failed to send Telegram typing indicator');
@@ -438,3 +454,44 @@ registerChannel('telegram', (opts: ChannelOpts) => {
   }
   return new TelegramChannel(token, opts);
 });
+
+// Multi-bot support: register additional Telegram bots from TELEGRAM_BOT_TOKEN_<NAME> env vars.
+// Each additional bot is registered as a separate channel instance (e.g., "telegram:tom").
+// The bot only handles chats registered to its channel name in registered_groups.
+(() => {
+  const envFile = path.join(process.cwd(), '.env');
+  let envContent = '';
+  try {
+    envContent = fs.readFileSync(envFile, 'utf-8');
+  } catch {
+    /* no .env */
+  }
+
+  const tokenPattern = /^TELEGRAM_BOT_TOKEN_(\w+)\s*=\s*(.+)/;
+  const tokens: Array<{ name: string; token: string }> = [];
+
+  for (const line of envContent.split('\n')) {
+    const m = line.trim().match(tokenPattern);
+    if (!m) continue;
+    const val = m[2].replace(/^['"]|['"]$/g, '').trim();
+    if (val) tokens.push({ name: m[1].toLowerCase(), token: val });
+  }
+
+  // Also check process.env
+  for (const key of Object.keys(process.env)) {
+    const m = key.match(/^TELEGRAM_BOT_TOKEN_(\w+)$/);
+    if (!m) continue;
+    const name = m[1].toLowerCase();
+    if (tokens.some((t) => t.name === name)) continue;
+    const val = process.env[key] || '';
+    if (val) tokens.push({ name, token: val });
+  }
+
+  for (const { name, token } of tokens) {
+    registerChannel(`telegram:${name}`, (opts: ChannelOpts) => {
+      const channel = new TelegramChannel(token, opts);
+      channel.name = `telegram:${name}`;
+      return channel;
+    });
+  }
+})();
