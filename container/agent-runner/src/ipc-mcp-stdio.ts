@@ -864,6 +864,136 @@ server.tool(
   },
 );
 
+// --- Bot Management Tools ---
+
+server.tool(
+  'bot_list',
+  'List all registered bot agents with their session status.',
+  {},
+  async () => {
+    const requestId = generateRequestId();
+    writeIpcFile(TASKS_DIR, {
+      type: 'bot_list',
+      requestId,
+      timestamp: new Date().toISOString(),
+    });
+    try {
+      const result = await pollForResult(requestId, 10000);
+      return { content: [{ type: 'text' as const, text: result }] };
+    } catch (err) {
+      return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+    }
+  },
+);
+
+server.tool(
+  'bot_session_info',
+  'Get session details for a specific bot (session ID, file size, last activity).',
+  { group_folder: z.string().describe('The group folder name (e.g., "telegram_tom")') },
+  async (args) => {
+    const requestId = generateRequestId();
+    writeIpcFile(TASKS_DIR, {
+      type: 'bot_session_info',
+      requestId,
+      groupFolder: args.group_folder,
+      timestamp: new Date().toISOString(),
+    });
+    try {
+      const result = await pollForResult(requestId, 10000);
+      return { content: [{ type: 'text' as const, text: result }] };
+    } catch (err) {
+      return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+    }
+  },
+);
+
+server.tool(
+  'bot_reset_session',
+  'Reset a bot\'s session so the next message starts a fresh conversation. The bot loses all conversation history.',
+  { group_folder: z.string().describe('The group folder name (e.g., "telegram_tom")') },
+  async (args) => {
+    const requestId = generateRequestId();
+    writeIpcFile(TASKS_DIR, {
+      type: 'bot_reset_session',
+      requestId,
+      groupFolder: args.group_folder,
+      timestamp: new Date().toISOString(),
+    });
+    try {
+      const result = await pollForResult(requestId, 10000);
+      return { content: [{ type: 'text' as const, text: result }] };
+    } catch (err) {
+      return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+    }
+  },
+);
+
+server.tool(
+  'bot_read_persona',
+  'Read a bot\'s personality instructions (CLAUDE.md content).',
+  { group_folder: z.string().describe('The group folder name (e.g., "telegram_tom")') },
+  async (args) => {
+    const requestId = generateRequestId();
+    writeIpcFile(TASKS_DIR, {
+      type: 'bot_read_persona',
+      requestId,
+      groupFolder: args.group_folder,
+      timestamp: new Date().toISOString(),
+    });
+    try {
+      const result = await pollForResult(requestId, 10000);
+      return { content: [{ type: 'text' as const, text: result }] };
+    } catch (err) {
+      return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+    }
+  },
+);
+
+server.tool(
+  'bot_update_persona',
+  'Update a bot\'s personality instructions (overwrites CLAUDE.md).',
+  {
+    group_folder: z.string().describe('The group folder name (e.g., "telegram_tom")'),
+    content: z.string().describe('The new CLAUDE.md content'),
+  },
+  async (args) => {
+    const requestId = generateRequestId();
+    writeIpcFile(TASKS_DIR, {
+      type: 'bot_update_persona',
+      requestId,
+      groupFolder: args.group_folder,
+      content: args.content,
+      timestamp: new Date().toISOString(),
+    });
+    try {
+      const result = await pollForResult(requestId, 10000);
+      return { content: [{ type: 'text' as const, text: result }] };
+    } catch (err) {
+      return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+    }
+  },
+);
+
+server.tool(
+  'nanoclaw_restart',
+  'Restart the NanoClaw service. All bots will disconnect briefly and reconnect.',
+  {},
+  async () => {
+    const requestId = generateRequestId();
+    writeIpcFile(TASKS_DIR, {
+      type: 'nanoclaw_restart',
+      requestId,
+      timestamp: new Date().toISOString(),
+    });
+    try {
+      const result = await pollForResult(requestId, 15000);
+      return { content: [{ type: 'text' as const, text: result }] };
+    } catch (err) {
+      return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+    }
+  },
+);
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);

@@ -5,7 +5,15 @@ import { CronExpressionParser } from 'cron-parser';
 
 import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
 import { AvailableGroup } from './container-runner.js';
-import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
+import {
+  createTask,
+  deleteTask,
+  deleteSession,
+  getAllRegisteredGroups,
+  getAllSessions,
+  getTaskById,
+  updateTask,
+} from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
 import * as hostExecutor from './host-executor.js';
 import { logger } from './logger.js';
@@ -27,6 +35,15 @@ export interface IpcDeps {
 }
 
 let ipcWatcherRunning = false;
+
+function writeBotResult(id: string, data: object): void {
+  const resultsDir = hostExecutor.getResultsDir();
+  fs.mkdirSync(resultsDir, { recursive: true });
+  const tmp = path.join(resultsDir, `${id}.json.tmp`);
+  const final = path.join(resultsDir, `${id}.json`);
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
+  fs.renameSync(tmp, final);
+}
 
 export function startIpcWatcher(deps: IpcDeps): void {
   if (ipcWatcherRunning) {
@@ -183,6 +200,8 @@ export async function processTaskIpc(
     port?: number;
     lines?: number;
     pattern?: string;
+    // For bot management
+    content?: string;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -600,6 +619,153 @@ export async function processTaskIpc(
       }
       if (data.requestId) {
         hostExecutor.openDashboard(data.requestId);
+      }
+      break;
+
+    case 'bot_list':
+      if (data.requestId) {
+        const groups = getAllRegisteredGroups();
+        const sessions = getAllSessions();
+        const bots = Object.entries(groups).map(([jid, g]) => ({
+          jid,
+          name: g.name,
+          folder: g.folder,
+          channel: g.channel || 'default',
+          trigger: g.trigger,
+          requiresTrigger: g.requiresTrigger ?? true,
+          isMain: g.isMain || false,
+          hasSession: !!sessions[g.folder],
+        }));
+        writeBotResult(data.requestId, { bots });
+      }
+      break;
+
+    case 'bot_session_info':
+      if (data.requestId && data.groupFolder) {
+        const sessions = getAllSessions();
+        const sessionId = sessions[data.groupFolder];
+        const sessionDir = path.join(
+          DATA_DIR,
+          'sessions',
+          data.groupFolder,
+          '.claude',
+        );
+        let fileSize = 0;
+        let lastModified: string | null = null;
+        try {
+          const files = fs.readdirSync(sessionDir);
+          for (const f of files) {
+            if (f.endsWith('.jsonl')) {
+              const stat = fs.statSync(path.join(sessionDir, f));
+              fileSize += stat.size;
+              const mtime = stat.mtime.toISOString();
+              if (!lastModified || mtime > lastModified) lastModified = mtime;
+            }
+          }
+        } catch {
+          /* session dir may not exist */
+        }
+        writeBotResult(data.requestId, {
+          groupFolder: data.groupFolder,
+          sessionId: sessionId || null,
+          fileSize,
+          lastModified,
+        });
+      }
+      break;
+
+    case 'bot_reset_session':
+      if (data.requestId && data.groupFolder) {
+        if (!isValidGroupFolder(data.groupFolder)) {
+          writeBotResult(data.requestId, { error: 'Invalid group folder' });
+          break;
+        }
+        deleteSession(data.groupFolder);
+        const sessionDir = path.join(
+          DATA_DIR,
+          'sessions',
+          data.groupFolder,
+          '.claude',
+        );
+        try {
+          const files = fs.readdirSync(sessionDir);
+          for (const f of files) {
+            if (f.endsWith('.jsonl')) {
+              fs.unlinkSync(path.join(sessionDir, f));
+            }
+          }
+        } catch {
+          /* no session files */
+        }
+        logger.info(
+          { groupFolder: data.groupFolder, sourceGroup },
+          'Bot session reset via IPC',
+        );
+        writeBotResult(data.requestId, {
+          groupFolder: data.groupFolder,
+          status: 'reset',
+        });
+      }
+      break;
+
+    case 'bot_read_persona':
+      if (data.requestId && data.groupFolder) {
+        if (!isValidGroupFolder(data.groupFolder)) {
+          writeBotResult(data.requestId, { error: 'Invalid group folder' });
+          break;
+        }
+        const groupDir = path.join(process.cwd(), 'groups', data.groupFolder);
+        let personaContent = '';
+        const localMd = path.join(groupDir, 'CLAUDE.local.md');
+        const claudeMd = path.join(groupDir, 'CLAUDE.md');
+        if (fs.existsSync(localMd)) {
+          personaContent = fs.readFileSync(localMd, 'utf-8');
+        } else if (fs.existsSync(claudeMd)) {
+          personaContent = fs.readFileSync(claudeMd, 'utf-8');
+        }
+        writeBotResult(data.requestId, {
+          groupFolder: data.groupFolder,
+          content: personaContent || '(no persona file found)',
+        });
+      }
+      break;
+
+    case 'bot_update_persona':
+      if (data.requestId && data.groupFolder && data.content !== undefined) {
+        if (!isValidGroupFolder(data.groupFolder)) {
+          writeBotResult(data.requestId, { error: 'Invalid group folder' });
+          break;
+        }
+        const groupDir = path.join(process.cwd(), 'groups', data.groupFolder);
+        fs.mkdirSync(groupDir, { recursive: true });
+        const claudeMd = path.join(groupDir, 'CLAUDE.md');
+        fs.writeFileSync(claudeMd, data.content);
+        logger.info(
+          { groupFolder: data.groupFolder, sourceGroup },
+          'Bot persona updated via IPC',
+        );
+        writeBotResult(data.requestId, {
+          groupFolder: data.groupFolder,
+          status: 'updated',
+        });
+      }
+      break;
+
+    case 'nanoclaw_restart':
+      if (data.requestId) {
+        const { execSync } = await import('child_process');
+        try {
+          const uid = execSync('id -u', { encoding: 'utf-8' }).trim();
+          execSync(`launchctl kickstart -k gui/${uid}/com.nanoclaw`, {
+            encoding: 'utf-8',
+            timeout: 10000,
+          });
+          writeBotResult(data.requestId, { status: 'restarting' });
+        } catch (err) {
+          writeBotResult(data.requestId, {
+            error: `Restart failed: ${err instanceof Error ? err.message : String(err)}`,
+          });
+        }
       }
       break;
 
