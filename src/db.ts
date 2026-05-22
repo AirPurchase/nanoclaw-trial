@@ -128,9 +128,7 @@ function createSchema(database: Database.Database): void {
 
   // Add channel column to registered_groups (multi-bot support)
   try {
-    database.exec(
-      `ALTER TABLE registered_groups ADD COLUMN channel TEXT`,
-    );
+    database.exec(`ALTER TABLE registered_groups ADD COLUMN channel TEXT`);
   } catch {
     /* column already exists */
   }
